@@ -24,9 +24,14 @@ class QueryGeneratorTest {
 
     @BeforeEach
     void setUp() {
-        // Mock the database client to return some dummy data
-        when(mockDbClient.fetchSampleIds(anyString(), anyString()))
-                .thenReturn(List.of("patient1", "patient2"));
+        when(mockDbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"))
+                .thenReturn(List.of("patient1"));
+        when(mockDbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"))
+                .thenReturn(List.of("unit1"));
+        when(mockDbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"))
+                .thenReturn(List.of("diag1"));
+        when(mockDbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"))
+                .thenReturn(List.of("adm1"));
         
         queryGenerator = new QueryGenerator(mockDbClient);
     }

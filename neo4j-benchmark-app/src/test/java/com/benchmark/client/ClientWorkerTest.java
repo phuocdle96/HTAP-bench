@@ -26,24 +26,21 @@ class ClientWorkerTest {
     @Mock
     private DatabaseClient mockDbClient;
 
-    private Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> queryQueues;
+    private BlockingQueue<QueryTemplate.PreparedQuery> queryQueue;
 
     @BeforeEach
     void setUp() {
-        queryQueues = new HashMap<>();
-        BlockingQueue<QueryTemplate.PreparedQuery> oltpQueue = new LinkedBlockingQueue<>();
-        oltpQueue.add(new QueryTemplate.PreparedQuery("MATCH (n) RETURN n", Collections.emptyMap()));
-        queryQueues.put("OLTP", oltpQueue);
+        queryQueue = new LinkedBlockingQueue<>();
+        queryQueue.add(new QueryTemplate.PreparedQuery("MATCH (n) RETURN n", Collections.emptyMap()));
     }
 
     @Test
     void testWorkerExecutesQueryAndRecordsResult() throws Exception {
         long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueues, endTime, false);
+        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, false);
 
         List<QueryResult> results = worker.call();
 
-        // CORRECTED: Verify the method was called at least once
         verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
         assertFalse(results.isEmpty());
         assertEquals("OLTP", results.get(0).category());
@@ -53,11 +50,10 @@ class ClientWorkerTest {
     @Test
     void testWarmupRunDoesNotRecordResults() throws Exception {
         long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueues, endTime, true);
+        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, true);
 
         List<QueryResult> results = worker.call();
 
-        // CORRECTED: Verify the method was called at least once
         verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
         assertTrue(results.isEmpty());
     }

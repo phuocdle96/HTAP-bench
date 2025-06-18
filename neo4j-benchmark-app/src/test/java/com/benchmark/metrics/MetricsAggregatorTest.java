@@ -25,13 +25,10 @@ class MetricsAggregatorTest {
         int durationSeconds = 10;
         
         // This is a simple test to ensure no exceptions are thrown.
-        // A more robust test would capture System.out and assert its contents.
         MetricsAggregator aggregator = new MetricsAggregator(results, durationSeconds);
         aggregator.printReport(); 
         
-        // Example of a more specific assertion you could make
-        double expectedOltpThroughput = 100.0 / 10.0;
-        // You would need to capture the output to properly test this value.
-        // assertEquals(expectedOltpThroughput, capturedThroughput);
+        // A more robust test could capture System.out and assert its contents,
+        // but for now, we just ensure it runs without error.
     }
 }
