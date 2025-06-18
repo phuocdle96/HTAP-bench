@@ -2,8 +2,8 @@
   {
     "name": "1.1 Patient Lookup",
     "category": "OLTP",
-    "params": ["id"],
-    "cypher": "MATCH (p:Patient {patientId: $id}) RETURN p.age, p.gender, p.nationality"
+    "params": ["patientId"],
+    "cypher": "MATCH (p:Patient {patientId: $patientId}) RETURN p.age, p.gender, p.nationality"
   },
   {
     "name": "1.2 Patient Admission",
@@ -26,8 +26,8 @@
   {
     "name": "3.1 Readmission Analysis",
     "category": "GRAPH",
-    "params": [],
-    "cypher": "MATCH (p:Patient)-[:HAD_EVENT]->(dis:Discharge), (p)-[:HAD_EVENT]->(adm:Admission) WHERE adm.date > dis.date WITH p, dis, adm, duration.between(date(dis.date), date(adm.date)).days AS daysToReadmission WHERE daysToReadmission > 0 AND daysToReadmission <= 30 RETURN p.patientId AS patient, dis.date AS dischargeDate, adm.date AS readmissionDate, daysToReadmission ORDER BY daysToReadmission LIMIT 100"
+    "params": ["patientId"],
+    "cypher": "MATCH (p:Patient {patientId: $patientId})-[:HAD_EVENT]->(e) WHERE e:Discharge OR e:Admission WITH p, collect(e) as events UNWIND events as discharge WITH p, events, discharge WHERE discharge:Discharge UNWIND events as admission WITH p, discharge, admission WHERE admission:Admission AND admission.date > discharge.date WITH p, discharge, admission, duration.between(date(discharge.date), date(admission.date)).days AS daysToReadmission WHERE daysToReadmission > 0 AND daysToReadmission <= 30 RETURN p.patientId AS patient, discharge.date AS dischargeDate, admission.date AS readmissionDate, daysToReadmission ORDER BY daysToReadmission"
   },
   {
     "name": "3.2 Disease Co-occurrence",
