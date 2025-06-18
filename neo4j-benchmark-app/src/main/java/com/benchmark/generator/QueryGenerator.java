@@ -32,10 +32,11 @@ public class QueryGenerator {
     
     private void fetchSampleIds(DatabaseClient dbClient) {
         System.out.println("Fetching sample IDs for parameter generation...");
-        sampleIds.put("patientId", dbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"));
-        sampleIds.put("unitId", dbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"));
-        sampleIds.put("diagnosisCode", dbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"));
-        sampleIds.put("admissionId", dbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"));
+        // CORRECTED: Use lowercase keys to match the logic in getRandomParamValue
+        sampleIds.put("patientid", dbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"));
+        sampleIds.put("unitid", dbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"));
+        sampleIds.put("diagnosiscode", dbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"));
+        sampleIds.put("admissionid", dbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"));
         System.out.println("Sample IDs fetched.");
     }
     

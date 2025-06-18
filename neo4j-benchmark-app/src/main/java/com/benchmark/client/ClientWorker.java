@@ -26,6 +26,12 @@ public class ClientWorker implements Callable<List<QueryResult>> {
     public List<QueryResult> call() {
         List<QueryResult> results = new ArrayList<>();
         String[] categories = queryQueues.keySet().toArray(new String[0]);
+        
+        // Defensive check to prevent crash if queues are empty
+        if (categories.length == 0) {
+            return results;
+        }
+
         int categoryIndex = 0;
 
         while (System.currentTimeMillis() < endTimeMillis) {

@@ -19,3 +19,5 @@ java -jar target\neo4j-benchmark-app-1.0-SNAPSHOT-jar-with-dependencies.jar ^
   --clients 16 ^
   --duration 60
 ```
+
+java -jar target\neo4j-benchmark-app-1.0-SNAPSHOT-jar-with-dependencies.jar --uri "neo4j://localhost:7687" --user neo4j --password Nhung1998 --database HealthCareDB --clients 16 --duration 60

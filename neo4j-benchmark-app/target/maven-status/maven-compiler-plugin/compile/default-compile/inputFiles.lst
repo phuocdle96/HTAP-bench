@@ -1,8 +1,8 @@
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\BenchmarkRunner.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\client\ClientWorker.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\client\DatabaseClient.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\client\Neo4jClient.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\generator\QueryGenerator.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\generator\QueryTemplate.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\metrics\MetricsAggregator.java
-E:\SJSU_Project\neo4j-benchmark-app\src\main\java\com\benchmark\metrics\QueryResult.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\BenchmarkRunner.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\client\ClientWorker.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\client\DatabaseClient.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\client\Neo4jClient.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\generator\QueryGenerator.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\generator\QueryTemplate.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\metrics\MetricsAggregator.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\metrics\QueryResult.java

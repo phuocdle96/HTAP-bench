@@ -27,7 +27,7 @@ public class BenchmarkRunner implements Callable<Integer> {
     @Option(names = {"--user"}, description = "Database user.", required = true)
     private String user;
 
-    @Option(names = {"-p", "--password"}, description = "Database password.", required = true, interactive = true)
+    @Option(names = {"-p", "--password"}, description = "Database password.", required = true)
     private String password;
     
     @Option(names = {"--database"}, description = "Target database name.", defaultValue = "neo4j")
