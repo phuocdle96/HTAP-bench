@@ -1,0 +1,38 @@
+[
+  {
+    "name": "1.1 Patient Lookup",
+    "category": "OLTP",
+    "params": ["id"],
+    "cypher": "MATCH (p:Patient {patientId: $id}) RETURN p.age, p.gender, p.nationality"
+  },
+  {
+    "name": "1.2 Patient Admission",
+    "category": "OLTP",
+    "params": ["patientId", "admissionId", "admissionDate", "unitId", "diagnosisCode"],
+    "cypher": "MATCH (p:Patient {patientId: $patientId}) MATCH (hcu:HealthcareUnit {unitId: $unitId}) MATCH (diag:Diagnosis {code: $diagnosisCode}) CREATE (adm:Event:Admission {eventId: $admissionId, date: $admissionDate}) CREATE (p)-[:HAD_EVENT]->(adm) CREATE (adm)-[:PERFORMED_AT]->(hcu) CREATE (adm)-[:HAS_DIAGNOSIS {type: 'PRIMARY'}]->(diag)"
+  },
+  {
+    "name": "2.2 Hospital Admission Analysis",
+    "category": "OLAP",
+    "params": ["year"],
+    "cypher": "MATCH (adm:Admission)-[:PERFORMED_AT]->(hcu:HealthcareUnit) WHERE adm.date STARTS WITH $year RETURN hcu.unitId AS hospital, count(adm) AS numberOfAdmissions ORDER BY numberOfAdmissions DESC LIMIT 20"
+  },
+  {
+    "name": "2.3 Disease Analysis",
+    "category": "OLAP",
+    "params": [],
+    "cypher": "MATCH (e:Event)-[r:HAS_DIAGNOSIS]->(d:Diagnosis) WHERE r.type = 'PRIMARY' RETURN d.code AS diagnosisCode, count(e) AS totalEvents ORDER BY totalEvents DESC LIMIT 25"
+  },
+  {
+    "name": "3.1 Readmission Analysis",
+    "category": "GRAPH",
+    "params": [],
+    "cypher": "MATCH (p:Patient)-[:HAD_EVENT]->(dis:Discharge), (p)-[:HAD_EVENT]->(adm:Admission) WHERE adm.date > dis.date WITH p, dis, adm, duration.between(date(dis.date), date(adm.date)).days AS daysToReadmission WHERE daysToReadmission > 0 AND daysToReadmission <= 30 RETURN p.patientId AS patient, dis.date AS dischargeDate, adm.date AS readmissionDate, daysToReadmission ORDER BY daysToReadmission LIMIT 100"
+  },
+  {
+    "name": "3.2 Disease Co-occurrence",
+    "category": "GRAPH",
+    "params": [],
+    "cypher": "MATCH (d1:Diagnosis)<-[:HAS_DIAGNOSIS]-(e:Event)-[:HAS_DIAGNOSIS]->(d2:Diagnosis) WHERE id(d1) < id(d2) RETURN d1.code AS diagnosis1, d2.code AS diagnosis2, count(e) AS co_occurrences ORDER BY co_occurrences DESC LIMIT 50"
+  }
+]
