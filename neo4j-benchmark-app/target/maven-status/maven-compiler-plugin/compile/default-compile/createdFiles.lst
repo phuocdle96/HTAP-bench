@@ -2,9 +2,9 @@ com\benchmark\client\Neo4jClient.class
 com\benchmark\client\DatabaseClient.class
 com\benchmark\metrics\MetricsAggregator.class
 com\benchmark\arrival\ArrivalScheduler.class
-com\benchmark\BenchmarkRunner$CaseInsensitiveEnumConverter.class
 com\benchmark\metrics\QueryResult.class
 com\benchmark\client\ClientWorker.class
+com\benchmark\arrival\ArrivalTimer.class
 com\benchmark\arrival\ArrivalMode.class
 com\benchmark\generator\QueryTemplate$PreparedQuery.class
 com\benchmark\generator\QueryTemplate.class

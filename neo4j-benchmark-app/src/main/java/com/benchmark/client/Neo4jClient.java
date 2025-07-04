@@ -1,17 +1,24 @@
 package com.benchmark.client;
 
-import org.neo4j.driver.*;                    // Driver, AuthTokens, Config, Session
+import org.neo4j.driver.*;
+
 import java.util.List;
 import java.util.Map;
+
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * Neo4j implementation of {@link DatabaseClient}.
- * Driver time-outs follow the benchmark duration (timeoutSeconds).
+ *
+ * <p>One {@link Driver} per JVM (shared, thread-safe) and
+ * one {@link Session} per *worker thread* via {@link ThreadLocal}.
+ * Eliminates per-query handshake latency while avoiding the
+ * “Existing open connection detected” error.</p>
  */
 public class Neo4jClient implements DatabaseClient, AutoCloseable {
 
     private final Driver driver;
+    private final ThreadLocal<Session> tlSession;
     private final String database;
 
     /* ---------- primary ctor ---------- */
@@ -21,6 +28,8 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
                        String database,
                        int timeoutSeconds) {
 
+        this.database = database;
+
         AuthToken auth = AuthTokens.basic(user, password);
 
         Config cfg = Config.builder()
@@ -29,11 +38,14 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
                 .withMaxTransactionRetryTime(timeoutSeconds, SECONDS)
                 .build();
 
-        this.driver   = GraphDatabase.driver(uri, auth, cfg);
-        this.database = database;
+        this.driver = GraphDatabase.driver(uri, auth, cfg);
+
+        // each thread lazily creates *its own* Session
+        this.tlSession = ThreadLocal.withInitial(
+                () -> driver.session(SessionConfig.forDatabase(database)));
     }
 
-    /* ---------- 4-arg back-compat ctor (60 s) ---------- */
+    /* ---------- 4-arg back-compat ctor (60 s timeout) ---------- */
     public Neo4jClient(String uri,
                        String user,
                        String password,
@@ -47,10 +59,9 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
     @Override
     public List<Map<String,Object>> executeQuery(String cypher,
                                                  Map<String,Object> params) {
-        try (Session ses = driver.session(SessionConfig.forDatabase(database))) {
-            return ses.run(cypher, params)
-                      .list(org.neo4j.driver.Record::asMap);          // <-- fully-qualified
-        }
+        return tlSession.get()
+                        .run(cypher, params)
+                        .list(org.neo4j.driver.Record::asMap);
     }
 
     @Override
@@ -61,11 +72,16 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
             : String.format("MATCH (n:%s) RETURN n.%s AS id LIMIT 10000",
                             labelOrQuery, idProp);
 
-        try (Session ses = driver.session(SessionConfig.forDatabase(database))) {
-            return ses.run(cypher)
-                      .list(r -> r.get("id").asString());             // r is org.neo4j.driver.Record
-        }
+        return tlSession.get()
+                        .run(cypher)
+                        .list(r -> r.get("id").asString());
     }
 
-    @Override public void close() { driver.close(); }
+    @Override
+    public void close() {
+        // close the session created by the current thread (BenchmarkRunner main)
+        Session s = tlSession.get();
+        if (s != null && s.isOpen()) s.close();
+        driver.close();
+    }
 }

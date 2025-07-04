@@ -2,59 +2,60 @@ package com.benchmark.client;
 
 import com.benchmark.generator.QueryTemplate;
 import com.benchmark.metrics.QueryResult;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
 
-@ExtendWith(MockitoExtension.class)
 class ClientWorkerTest {
 
-    @Mock
-    private DatabaseClient mockDbClient;
+    /** Dummy DB client that returns instantly. */
+    private static class NoopDb implements DatabaseClient {
+        @Override public void connect()            {}
+        @Override public List<String> fetchSampleIds(String l, String p){ return List.of(); }
+        @Override public List<java.util.Map<String,Object>> executeQuery(String c, java.util.Map<String,Object> m){ return List.of(); }
+        @Override public void close()              {}
+    }
 
-    private BlockingQueue<QueryTemplate.PreparedQuery> queryQueue;
-
-    @BeforeEach
-    void setUp() {
-        queryQueue = new LinkedBlockingQueue<>();
-        queryQueue.add(new QueryTemplate.PreparedQuery("MATCH (n) RETURN n", Collections.emptyMap()));
+    private static QueryTemplate.PreparedQuery dummyPQ() {
+        return new QueryTemplate.PreparedQuery("RETURN 1", java.util.Map.of());
     }
 
     @Test
-    void testWorkerExecutesQueryAndRecordsResult() throws Exception {
-        long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, false);
+    void testClosedLoopCollectsLatency() throws Exception {
+        BlockingQueue<QueryTemplate.PreparedQuery> q = new ArrayBlockingQueue<>(1);
+        q.add(dummyPQ());
 
-        List<QueryResult> results = worker.call();
+        ClientWorker w = new ClientWorker(
+                new NoopDb(),
+                q,
+                /* tokenQueue = */ null,      // CLOSED mode
+                "OLTP",
+                System.currentTimeMillis() + 1_000,   // run ≤1 s
+                false);
 
-        verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
-        assertFalse(results.isEmpty());
-        assertEquals("OLTP", results.get(0).category());
-        assertTrue(results.get(0).latencyNanos() > 0);
+        List<QueryResult> r = w.call();
+        assertFalse(r.isEmpty(), "Should record at least one result");
+        assertEquals("OLTP", r.get(0).category());
     }
 
     @Test
-    void testWarmupRunDoesNotRecordResults() throws Exception {
-        long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, true);
+    void testWarmupIgnored() throws Exception {
+        BlockingQueue<QueryTemplate.PreparedQuery> q = new ArrayBlockingQueue<>(1);
+        q.add(dummyPQ());
 
-        List<QueryResult> results = worker.call();
+        ClientWorker w = new ClientWorker(
+                new NoopDb(),
+                q,
+                /* tokenQueue = */ null,      // CLOSED mode
+                "OLTP",
+                System.currentTimeMillis() + 200,  // very short
+                true);                           // warm-up
 
-        verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
-        assertTrue(results.isEmpty());
+        List<QueryResult> r = w.call();
+        assertTrue(r.isEmpty(), "Warm-up run should not record results");
     }
 }

@@ -1,5 +1,6 @@
 E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\arrival\ArrivalMode.java
 E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\arrival\ArrivalScheduler.java
+E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\arrival\ArrivalTimer.java
 E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\BenchmarkRunner.java
 E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\client\ClientWorker.java
 E:\SJSU_Project\HTAP-bench\neo4j-benchmark-app\src\main\java\com\benchmark\client\DatabaseClient.java
