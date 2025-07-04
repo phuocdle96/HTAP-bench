@@ -83,7 +83,7 @@ public class BenchmarkRunner implements Callable<Integer> {
 
         /* ---------- ArrivalTimer shards (OPEN) ---------- */
         long phaseBEnd = System.currentTimeMillis() + durationSeconds*1000L;
-        ExecutorService timers = Executors.newFixedThreadPool(20);   // plenty for shards
+        ExecutorService timers    = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
 
         if (arrivalMode == ArrivalMode.OPEN) {
             startShardedTimers("OLTP",  λ.getOrDefault("OLTP",0.0),  oltpTok,  phaseBEnd, timers);
@@ -147,9 +147,9 @@ public class BenchmarkRunner implements Callable<Integer> {
                                        BlockingQueue<Object> olapTok,
                                        boolean warm) throws InterruptedException, ExecutionException {
 
-        ExecutorService oltpPool  = Executors.newFixedThreadPool(oltpThr);
-        ExecutorService graphPool = Executors.newFixedThreadPool(graphThr);
-        ExecutorService olapPool  = Executors.newFixedThreadPool(olapThr);
+        ExecutorService oltpPool  = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        ExecutorService graphPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        ExecutorService olapPool  = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
 
         long end = System.currentTimeMillis() + sec*1000L;
 

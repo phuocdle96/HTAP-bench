@@ -36,6 +36,7 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
                 .withConnectionTimeout(timeoutSeconds, SECONDS)
                 .withConnectionAcquisitionTimeout(timeoutSeconds, SECONDS)
                 .withMaxTransactionRetryTime(timeoutSeconds, SECONDS)
+                .withMaxConnectionPoolSize(400)
                 .build();
 
         this.driver = GraphDatabase.driver(uri, auth, cfg);
