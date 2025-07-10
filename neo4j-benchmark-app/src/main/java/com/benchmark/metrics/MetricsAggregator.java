@@ -1,22 +1,41 @@
 package com.benchmark.metrics;
 
+import com.benchmark.util.ResultsLogger;
 import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
+
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * Computes summary statistics for a benchmark run and
+ * writes them to a CSV results file.
+ */
 public class MetricsAggregator {
 
     private final List<QueryResult> snapshot;     // immutable copy
     private final int durationSeconds;
+    private final ResultsLogger csv;
+    private final Map<String,Integer> workers;   // new field
 
     public MetricsAggregator(List<QueryResult> unsafeSharedList,
-                             int durationSeconds) {
-        // defensive copy to avoid ConcurrentModificationException
+                         int durationSeconds,
+                         String csvFile,
+                         Map<String,Integer> workers) throws IOException {
+
         synchronized (unsafeSharedList) {
             this.snapshot = List.copyOf(unsafeSharedList);
         }
         this.durationSeconds = durationSeconds;
+
+        this.workers = workers;
+        this.csv = new ResultsLogger(csvFile,
+                "timestamp","category","workers",      // ← new header
+                "total_queries","throughput_ops",
+                "avg_latency_ms","median_latency_ms",
+                "p95_latency_ms","p99_latency_ms",
+                "min_latency_ms","max_latency_ms");
     }
 
     public void printReport() {
@@ -38,6 +57,28 @@ public class MetricsAggregator {
         byCategory.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .forEach(e -> printOneCategory(e.getKey(), e.getValue()));
+
+        // also emit an overall summary row
+        try {
+            csv.log(Map.of(
+                    "category", "OVERALL",
+                    "workers",  workers.values().stream().mapToInt(Integer::intValue).sum(),
+                    "total_queries", snapshot.size(),
+                    "throughput_ops", String.format(Locale.US, "%.2f", overallQps),
+                    "avg_latency_ms", "",
+                    "median_latency_ms", "",
+                    "p95_latency_ms", "",
+                    "p99_latency_ms", "",
+                    "min_latency_ms", "",
+                    "max_latency_ms", ""
+            ));
+        } catch (IOException e) {
+            System.err.println("CSV write failed: " + e.getMessage());
+        }
+
+        try {
+            csv.close();
+        } catch (IOException ignore) {}
     }
 
     /* helper */
@@ -49,13 +90,32 @@ public class MetricsAggregator {
         double qps = (double) list.size() / durationSeconds;
 
         System.out.printf("Category: %s%n", cat);
-        System.out.printf("  - Throughput:         %,.2f queries/sec%n", qps);
-        System.out.printf("  - Avg Latency:        %,.2f ms%n", stats.getMean());
+        System.out.printf("  - Workers:             %d%n", workers.getOrDefault(cat, 0));   // NEW
+        System.out.printf("  - Throughput:          %,.2f queries/sec%n", qps);
+        System.out.printf("  - Avg Latency:          %,.2f ms%n", stats.getMean());
         System.out.printf("  - Median Latency (p50): %,.2f ms%n", stats.getPercentile(50));
-        System.out.printf("  - p95 Latency:        %,.2f ms%n", stats.getPercentile(95));
-        System.out.printf("  - p99 Latency:        %,.2f ms%n", stats.getPercentile(99));
-        System.out.printf("  - Min Latency:        %,.2f ms%n", stats.getMin());
-        System.out.printf("  - Max Latency:        %,.2f ms%n", stats.getMax());
+        System.out.printf("  - p95 Latency:          %,.2f ms%n", stats.getPercentile(95));
+        System.out.printf("  - p99 Latency:          %,.2f ms%n", stats.getPercentile(99));
+        System.out.printf("  - Min Latency:          %,.2f ms%n", stats.getMin());
+        System.out.printf("  - Max Latency:          %,.2f ms%n", stats.getMax());
         System.out.println("----------------------------------------");
+
+        // write CSV
+        try {
+            csv.log(Map.of(
+                    "category", cat,
+                    "workers",         workers.getOrDefault(cat, 0),
+                    "total_queries", list.size(),
+                    "throughput_ops", String.format(Locale.US, "%.2f", qps),
+                    "avg_latency_ms", String.format(Locale.US, "%.2f", stats.getMean()),
+                    "median_latency_ms", String.format(Locale.US, "%.2f", stats.getPercentile(50)),
+                    "p95_latency_ms", String.format(Locale.US, "%.2f", stats.getPercentile(95)),
+                    "p99_latency_ms", String.format(Locale.US, "%.2f", stats.getPercentile(99)),
+                    "min_latency_ms", String.format(Locale.US, "%.2f", stats.getMin()),
+                    "max_latency_ms", String.format(Locale.US, "%.2f", stats.getMax())
+            ));
+        } catch (IOException e) {
+            System.err.println("CSV write failed: " + e.getMessage());
+        }
     }
 }

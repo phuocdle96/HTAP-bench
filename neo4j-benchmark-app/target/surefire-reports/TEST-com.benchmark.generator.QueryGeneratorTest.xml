@@ -1,74 +1,70 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.benchmark.generator.QueryGeneratorTest" time="0.507" tests="2" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.benchmark.generator.QueryGeneratorTest" time="0.521" tests="2" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="21"/>
     <property name="sun.jnu.encoding" value="UTF-8"/>
-    <property name="java.class.path" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/test-classes:/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/classes:/Users/ple/.m2/repository/org/neo4j/driver/neo4j-java-driver/5.19.0/neo4j-java-driver-5.19.0.jar:/Users/ple/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/Users/ple/.m2/repository/io/netty/netty-handler/4.1.108.Final/netty-handler-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-common/4.1.108.Final/netty-common-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-resolver/4.1.108.Final/netty-resolver-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-buffer/4.1.108.Final/netty-buffer-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-transport/4.1.108.Final/netty-transport-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.108.Final/netty-transport-native-unix-common-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-codec/4.1.108.Final/netty-codec-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar:/Users/ple/.m2/repository/io/projectreactor/reactor-core/3.6.4/reactor-core-3.6.4.jar:/Users/ple/.m2/repository/info/picocli/picocli/4.7.5/picocli-4.7.5.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter/5.11.0/junit-jupiter-5.11.0.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.11.0/junit-jupiter-api-5.11.0.jar:/Users/ple/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/ple/.m2/repository/org/junit/platform/junit-platform-commons/1.11.0/junit-platform-commons-1.11.0.jar:/Users/ple/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.11.0/junit-jupiter-params-5.11.0.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.11.0/junit-jupiter-engine-5.11.0.jar:/Users/ple/.m2/repository/org/junit/platform/junit-platform-engine/1.11.0/junit-platform-engine-1.11.0.jar:/Users/ple/.m2/repository/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar:/Users/ple/.m2/repository/com/google/errorprone/error_prone_annotations/2.27.0/error_prone_annotations-2.27.0.jar:/Users/ple/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar:/Users/ple/.m2/repository/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar:/Users/ple/.m2/repository/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar:/Users/ple/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar:/Users/ple/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/Users/ple/.m2/repository/org/mockito/mockito-junit-jupiter/5.11.0/mockito-junit-jupiter-5.11.0.jar:"/>
-    <property name="java.vm.vendor" value="Oracle Corporation"/>
+    <property name="java.class.path" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/test-classes:/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/classes:/home/phuoc-le/.m2/repository/org/neo4j/driver/neo4j-java-driver/5.19.0/neo4j-java-driver-5.19.0.jar:/home/phuoc-le/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/home/phuoc-le/.m2/repository/io/netty/netty-handler/4.1.108.Final/netty-handler-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-common/4.1.108.Final/netty-common-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-resolver/4.1.108.Final/netty-resolver-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-buffer/4.1.108.Final/netty-buffer-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-transport/4.1.108.Final/netty-transport-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.108.Final/netty-transport-native-unix-common-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-codec/4.1.108.Final/netty-codec-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar:/home/phuoc-le/.m2/repository/io/projectreactor/reactor-core/3.6.4/reactor-core-3.6.4.jar:/home/phuoc-le/.m2/repository/info/picocli/picocli/4.7.5/picocli-4.7.5.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter/5.11.0/junit-jupiter-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.11.0/junit-jupiter-api-5.11.0.jar:/home/phuoc-le/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/home/phuoc-le/.m2/repository/org/junit/platform/junit-platform-commons/1.11.0/junit-platform-commons-1.11.0.jar:/home/phuoc-le/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.11.0/junit-jupiter-params-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.11.0/junit-jupiter-engine-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/platform/junit-platform-engine/1.11.0/junit-platform-engine-1.11.0.jar:/home/phuoc-le/.m2/repository/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar:/home/phuoc-le/.m2/repository/com/google/errorprone/error_prone_annotations/2.27.0/error_prone_annotations-2.27.0.jar:/home/phuoc-le/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar:/home/phuoc-le/.m2/repository/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar:/home/phuoc-le/.m2/repository/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar:/home/phuoc-le/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar:/home/phuoc-le/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/home/phuoc-le/.m2/repository/org/mockito/mockito-junit-jupiter/5.11.0/mockito-junit-jupiter-5.11.0.jar:/home/phuoc-le/.m2/repository/org/apache/commons/commons-csv/1.11.0/commons-csv-1.11.0.jar:/home/phuoc-le/.m2/repository/commons-io/commons-io/2.16.1/commons-io-2.16.1.jar:/home/phuoc-le/.m2/repository/commons-codec/commons-codec/1.16.1/commons-codec-1.16.1.jar:"/>
+    <property name="java.vm.vendor" value="Ubuntu"/>
     <property name="sun.arch.data.model" value="64"/>
-    <property name="java.vendor.url" value="https://java.oracle.com/"/>
+    <property name="java.vendor.url" value="https://ubuntu.com/"/>
     <property name="user.timezone" value="America/Los_Angeles"/>
-    <property name="os.name" value="Mac OS X"/>
+    <property name="os.name" value="Linux"/>
     <property name="java.vm.specification.version" value="21"/>
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
-    <property name="sun.boot.library.path" value="/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home/lib"/>
-    <property name="sun.java.command" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire/surefirebooter-20250704135224761_3.jar /Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire 2025-07-04T13-52-24_724-jvmRun1 surefire-20250704135224761_1tmp surefire_0-20250704135224761_2tmp"/>
-    <property name="http.nonProxyHosts" value="local|*.local|169.254/16|*.169.254/16"/>
+    <property name="sun.boot.library.path" value="/usr/lib/jvm/java-21-openjdk-amd64/lib"/>
+    <property name="sun.java.command" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire/surefirebooter-20250710002956333_3.jar /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire 2025-07-10T00-29-56_292-jvmRun1 surefire-20250710002956333_1tmp surefire_0-20250710002956333_2tmp"/>
     <property name="jdk.debug" value="release"/>
-    <property name="surefire.test.class.path" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/test-classes:/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/classes:/Users/ple/.m2/repository/org/neo4j/driver/neo4j-java-driver/5.19.0/neo4j-java-driver-5.19.0.jar:/Users/ple/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/Users/ple/.m2/repository/io/netty/netty-handler/4.1.108.Final/netty-handler-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-common/4.1.108.Final/netty-common-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-resolver/4.1.108.Final/netty-resolver-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-buffer/4.1.108.Final/netty-buffer-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-transport/4.1.108.Final/netty-transport-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.108.Final/netty-transport-native-unix-common-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-codec/4.1.108.Final/netty-codec-4.1.108.Final.jar:/Users/ple/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar:/Users/ple/.m2/repository/io/projectreactor/reactor-core/3.6.4/reactor-core-3.6.4.jar:/Users/ple/.m2/repository/info/picocli/picocli/4.7.5/picocli-4.7.5.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter/5.11.0/junit-jupiter-5.11.0.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.11.0/junit-jupiter-api-5.11.0.jar:/Users/ple/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/ple/.m2/repository/org/junit/platform/junit-platform-commons/1.11.0/junit-platform-commons-1.11.0.jar:/Users/ple/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.11.0/junit-jupiter-params-5.11.0.jar:/Users/ple/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.11.0/junit-jupiter-engine-5.11.0.jar:/Users/ple/.m2/repository/org/junit/platform/junit-platform-engine/1.11.0/junit-platform-engine-1.11.0.jar:/Users/ple/.m2/repository/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar:/Users/ple/.m2/repository/com/google/errorprone/error_prone_annotations/2.27.0/error_prone_annotations-2.27.0.jar:/Users/ple/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar:/Users/ple/.m2/repository/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar:/Users/ple/.m2/repository/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar:/Users/ple/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar:/Users/ple/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/Users/ple/.m2/repository/org/mockito/mockito-junit-jupiter/5.11.0/mockito-junit-jupiter-5.11.0.jar:"/>
+    <property name="surefire.test.class.path" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/test-classes:/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/classes:/home/phuoc-le/.m2/repository/org/neo4j/driver/neo4j-java-driver/5.19.0/neo4j-java-driver-5.19.0.jar:/home/phuoc-le/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/home/phuoc-le/.m2/repository/io/netty/netty-handler/4.1.108.Final/netty-handler-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-common/4.1.108.Final/netty-common-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-resolver/4.1.108.Final/netty-resolver-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-buffer/4.1.108.Final/netty-buffer-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-transport/4.1.108.Final/netty-transport-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.108.Final/netty-transport-native-unix-common-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-codec/4.1.108.Final/netty-codec-4.1.108.Final.jar:/home/phuoc-le/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar:/home/phuoc-le/.m2/repository/io/projectreactor/reactor-core/3.6.4/reactor-core-3.6.4.jar:/home/phuoc-le/.m2/repository/info/picocli/picocli/4.7.5/picocli-4.7.5.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter/5.11.0/junit-jupiter-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.11.0/junit-jupiter-api-5.11.0.jar:/home/phuoc-le/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/home/phuoc-le/.m2/repository/org/junit/platform/junit-platform-commons/1.11.0/junit-platform-commons-1.11.0.jar:/home/phuoc-le/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.11.0/junit-jupiter-params-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.11.0/junit-jupiter-engine-5.11.0.jar:/home/phuoc-le/.m2/repository/org/junit/platform/junit-platform-engine/1.11.0/junit-platform-engine-1.11.0.jar:/home/phuoc-le/.m2/repository/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar:/home/phuoc-le/.m2/repository/com/google/errorprone/error_prone_annotations/2.27.0/error_prone_annotations-2.27.0.jar:/home/phuoc-le/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar:/home/phuoc-le/.m2/repository/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar:/home/phuoc-le/.m2/repository/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar:/home/phuoc-le/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar:/home/phuoc-le/.m2/repository/org/objenesis/objenesis/3.3/objenesis-3.3.jar:/home/phuoc-le/.m2/repository/org/mockito/mockito-junit-jupiter/5.11.0/mockito-junit-jupiter-5.11.0.jar:/home/phuoc-le/.m2/repository/org/apache/commons/commons-csv/1.11.0/commons-csv-1.11.0.jar:/home/phuoc-le/.m2/repository/commons-io/commons-io/2.16.1/commons-io-2.16.1.jar:/home/phuoc-le/.m2/repository/commons-codec/commons-codec/1.16.1/commons-codec-1.16.1.jar:"/>
     <property name="sun.cpu.endian" value="little"/>
-    <property name="user.home" value="/Users/ple"/>
+    <property name="user.home" value="/home/phuoc-le"/>
     <property name="user.language" value="en"/>
     <property name="java.specification.vendor" value="Oracle Corporation"/>
-    <property name="java.version.date" value="2025-01-21"/>
-    <property name="java.home" value="/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home"/>
+    <property name="java.version.date" value="2025-04-15"/>
+    <property name="java.home" value="/usr/lib/jvm/java-21-openjdk-amd64"/>
     <property name="file.separator" value="/"/>
-    <property name="basedir" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app"/>
+    <property name="basedir" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app"/>
     <property name="java.vm.compressedOopsMode" value="Zero based"/>
     <property name="line.separator" value="&#10;"/>
-    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="apple.awt.application.name" value="ForkedBooter"/>
-    <property name="surefire.real.class.path" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire/surefirebooter-20250704135224761_3.jar"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="surefire.real.class.path" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/target/surefire/surefirebooter-20250710002956333_3.jar"/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
-    <property name="ftp.nonProxyHosts" value="local|*.local|169.254/16|*.169.254/16"/>
-    <property name="java.runtime.version" value="21.0.6+8-LTS-188"/>
-    <property name="user.name" value="ple"/>
+    <property name="java.runtime.version" value="21.0.7+6-Ubuntu-0ubuntu124.04"/>
+    <property name="user.name" value="phuoc-le"/>
     <property name="stdout.encoding" value="UTF-8"/>
     <property name="path.separator" value=":"/>
-    <property name="os.version" value="15.5"/>
-    <property name="java.runtime.name" value="Java(TM) SE Runtime Environment"/>
+    <property name="os.version" value="6.11.0-29-generic"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
     <property name="file.encoding" value="UTF-8"/>
-    <property name="java.vm.name" value="Java HotSpot(TM) 64-Bit Server VM"/>
-    <property name="localRepository" value="/Users/ple/.m2/repository"/>
-    <property name="java.vendor.url.bug" value="https://bugreport.java.com/bugreport/"/>
-    <property name="java.io.tmpdir" value="/var/folders/jr/j8m8vb517t51_yx_pzvbw2jr0000gn/T/"/>
-    <property name="java.version" value="21.0.6"/>
-    <property name="user.dir" value="/Users/ple/SJSU_Project/HTAP-bench/neo4j-benchmark-app"/>
-    <property name="os.arch" value="aarch64"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="localRepository" value="/home/phuoc-le/.m2/repository"/>
+    <property name="java.vendor.url.bug" value="https://bugs.launchpad.net/ubuntu/+source/openjdk-21"/>
+    <property name="java.io.tmpdir" value="/tmp"/>
+    <property name="java.version" value="21.0.7"/>
+    <property name="user.dir" value="/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app"/>
+    <property name="os.arch" value="amd64"/>
     <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
     <property name="native.encoding" value="UTF-8"/>
-    <property name="java.library.path" value="/Users/ple/Library/Java/Extensions:/Library/Java/Extensions:/Network/Library/Java/Extensions:/System/Library/Java/Extensions:/usr/lib/java:."/>
+    <property name="java.library.path" value="/usr/java/packages/lib:/usr/lib/x86_64-linux-gnu/jni:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib/jni:/lib:/usr/lib"/>
     <property name="java.vm.info" value="mixed mode, sharing"/>
     <property name="stderr.encoding" value="UTF-8"/>
-    <property name="java.vendor" value="Oracle Corporation"/>
-    <property name="java.vm.version" value="21.0.6+8-LTS-188"/>
-    <property name="sun.io.unicode.encoding" value="UnicodeBig"/>
-    <property name="socksNonProxyHosts" value="local|*.local|169.254/16|*.169.254/16"/>
+    <property name="java.vendor" value="Ubuntu"/>
+    <property name="java.vm.version" value="21.0.7+6-Ubuntu-0ubuntu124.04"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="65.0"/>
   </properties>
-  <testcase name="testTemplatesAreLoaded" classname="com.benchmark.generator.QueryGeneratorTest" time="0.481">
+  <testcase name="testTemplatesAreLoaded" classname="com.benchmark.generator.QueryGeneratorTest" time="0.493">
     <system-out><![CDATA[Fetching sample IDs for parameter generation...
 Sample IDs fetched.
 ]]></system-out>
-    <system-err><![CDATA[WARNING: A Java agent has been loaded dynamically (/Users/ple/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar)
+    <system-err><![CDATA[WARNING: A Java agent has been loaded dynamically (/home/phuoc-le/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar)
 WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
 WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
 WARNING: Dynamic loading of agents will be disallowed by default in a future release
 ]]></system-err>
   </testcase>
-  <testcase name="testPrepareAllQueriesGeneratesData" classname="com.benchmark.generator.QueryGeneratorTest" time="0.025">
+  <testcase name="testPrepareAllQueriesGeneratesData" classname="com.benchmark.generator.QueryGeneratorTest" time="0.026">
     <system-out><![CDATA[Fetching sample IDs for parameter generation...
 Sample IDs fetched.
 ]]></system-out>

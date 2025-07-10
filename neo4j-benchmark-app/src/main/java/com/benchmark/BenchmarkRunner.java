@@ -107,7 +107,16 @@ public class BenchmarkRunner implements Callable<Integer> {
         timers.shutdownNow();
         db.close();
 
-        new MetricsAggregator(results, durationSeconds - warmupSeconds).printReport();
+        Map<String,Integer> workerMap = Map.of(
+                "OLTP",  oltpClients,
+                "GRAPH", graphClients,
+                "OLAP",  olapClients);
+
+        new MetricsAggregator(results,
+                            durationSeconds - warmupSeconds,
+                            "benchmark_results.csv",
+                            workerMap)
+            .printReport();
 
         Instant endTs = Instant.now();
         System.out.printf("Benchmark finished at %s (elapsed %s)%n",

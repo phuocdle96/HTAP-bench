@@ -1,5 +1,6 @@
 com/benchmark/arrival/ArrivalTimer.class
 com/benchmark/arrival/ArrivalScheduler.class
+com/benchmark/util/ResultsLogger.class
 com/benchmark/generator/QueryGenerator$1.class
 com/benchmark/client/DatabaseClient.class
 com/benchmark/client/Neo4jClient.class
