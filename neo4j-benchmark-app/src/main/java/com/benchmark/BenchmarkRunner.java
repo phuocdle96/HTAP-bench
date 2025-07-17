@@ -134,8 +134,20 @@ public class BenchmarkRunner implements Callable<Integer> {
             throws InterruptedException {
 
         int maxVThreads=512;                                      // cap
-        ExecutorService workerPool=
-                Executors.newFixedThreadPool(maxVThreads,Thread.ofVirtual().factory());
+        ThreadPoolExecutor workerPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(
+                maxVThreads, Thread.ofVirtual().factory());
+        
+        ScheduledExecutorService probe = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
+        
+        long phaseStartMillis = System.currentTimeMillis();
+
+        probe.scheduleAtFixedRate(() -> {
+                int queued  = workerPool.getQueue().size();
+                int active  = workerPool.getActiveCount();
+                long since  = (System.currentTimeMillis() - phaseStartMillis) / 1000;
+                System.out.printf("t+%3ds backlog=%7d  queued=%6d  active=%4d%n",
+                        since, Math.max(0, queued + active - maxVThreads), queued, active);
+            }, 0, 1, TimeUnit.SECONDS);
 
         long endMs=System.currentTimeMillis()+sec*1000L;
 
@@ -160,9 +172,9 @@ public class BenchmarkRunner implements Callable<Integer> {
         /* Wait for all arrival threads to finish */
         for (Thread t:submitters) t.join();
 
+        probe.shutdownNow();
         /* Now it's safe to shut the worker pool */
-        workerPool.shutdown();
-        workerPool.awaitTermination(5,TimeUnit.MINUTES);
+        workerPool.shutdown(); // cancels queued tasks, interrupts running ones
     }
 
     /* ---------- helpers ---------- */
