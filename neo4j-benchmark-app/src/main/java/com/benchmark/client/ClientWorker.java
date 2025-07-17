@@ -3,68 +3,64 @@ package com.benchmark.client;
 import com.benchmark.generator.QueryTemplate;
 import com.benchmark.metrics.QueryResult;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
-public class ClientWorker implements Callable<List<QueryResult>> {
+/**
+ * Executes one query after another until endMillis.
+ * In open-loop mode each instance is “single-shot”; in closed mode it
+ * can loop as long as tokens are available.
+ */
+public class ClientWorker implements Runnable {
 
-    private final DatabaseClient db;
-    private final BlockingQueue<QueryTemplate.PreparedQuery> queries;
-    private final BlockingQueue<Object> tokens;     // null ⇒ closed‐loop
-    private final String category;
-    private final long endMillis;
-    private final boolean warmup;
+    private final DatabaseClient                              db;
+    private final BlockingQueue<QueryTemplate.PreparedQuery>  qPool;
+    private final String                                      category;
+    private final long                                        endMillis;
+    private final boolean                                     warm;
+    private final List<QueryResult>                           collector;
+    private final boolean                                     singleShot;
 
     public ClientWorker(DatabaseClient db,
-                        BlockingQueue<QueryTemplate.PreparedQuery> queries,
-                        BlockingQueue<Object> tokens,
+                        BlockingQueue<QueryTemplate.PreparedQuery> qPool,
                         String category,
                         long endMillis,
-                        boolean warmup) {
-        this.db        = db;
-        this.queries   = queries;
-        this.tokens    = tokens;
-        this.category  = category;
-        this.endMillis = endMillis;
-        this.warmup    = warmup;
+                        boolean warm,
+                        boolean singleShot,
+                        List<QueryResult> collector) {
+        this.db         = db;
+        this.qPool      = qPool;
+        this.category   = category;
+        this.endMillis  = endMillis;
+        this.warm       = warm;
+        this.collector  = collector;
+        this.singleShot = singleShot;
     }
 
     @Override
-    public List<QueryResult> call() {
-        List<QueryResult> out = new ArrayList<>();
+    public void run() {
+        while (System.currentTimeMillis() < endMillis) {
+            QueryTemplate.PreparedQuery pq = qPool.poll();
+            if (pq == null) break;                          // no work right now
 
-        while (!Thread.currentThread().isInterrupted() &&
-               System.currentTimeMillis() < endMillis) {
-            try {
-                /* ---------- open-loop throttle ---------- */
-                if (tokens != null) {
-                    long remaining = endMillis - System.currentTimeMillis();
-                    if (remaining <= 0) break;                       // phase over
-                    Object tok = tokens.poll(remaining, TimeUnit.MILLISECONDS);
-                    if (tok == null) break;                         // timer stopped
-                }
+            long start = System.nanoTime();
 
-                /* ---------- run query ---------- */
-                QueryTemplate.PreparedQuery pq = queries.take();
+            /* ---- call the method that exists in Neo4jClient ---- */
+            db.executeQuery(pq.cypher(), pq.params());
 
-                long t0 = System.nanoTime();
-                try {
-                    db.executeQuery(pq.cypher(), pq.params());
-                } catch (Exception ex) {
-                    if (!warmup)
-                        System.err.printf("%s error: %s%n", category, ex.getMessage());
-                }
-                if (!warmup)
-                    out.add(new QueryResult(category, System.nanoTime() - t0));
+            long latency = System.nanoTime() - start;
 
-                queries.offer(pq);                                  // recycle
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
+            if (!warm) {
+                collector.add(new QueryResult(category, latency));
             }
+
+            qPool.offer(pq);
+
+            /* In open-loop mode this worker is single-shot; exit. */
+            if (singleShot) break;
         }
-        return out;
     }
 }

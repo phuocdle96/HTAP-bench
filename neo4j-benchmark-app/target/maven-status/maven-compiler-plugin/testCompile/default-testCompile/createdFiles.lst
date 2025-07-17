@@ -1,4 +1,3 @@
 com/benchmark/metrics/MetricsAggregatorTest.class
 com/benchmark/generator/QueryGeneratorTest.class
 com/benchmark/client/ClientWorkerTest.class
-com/benchmark/client/ClientWorkerTest$NoopDb.class

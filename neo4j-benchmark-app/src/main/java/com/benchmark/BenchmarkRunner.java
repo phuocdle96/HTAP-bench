@@ -1,7 +1,7 @@
 package com.benchmark;
 
 import com.benchmark.arrival.ArrivalMode;
-import com.benchmark.arrival.ArrivalTimer;
+import com.benchmark.arrival.ArrivalSubmitter;
 import com.benchmark.client.ClientWorker;
 import com.benchmark.client.DatabaseClient;
 import com.benchmark.client.Neo4jClient;
@@ -19,33 +19,35 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 
-@Command(name="benchmark-runner", mixinStandardHelpOptions=true,
-         description="Neo4j HTAP benchmark – open / closed arrival modes")
+/**
+ * Neo4j HTAP benchmark – CLOSED (token) and OPEN (Poisson) arrival modes.
+ * Uses virtual threads (JDK 21).
+ */
+@Command(name = "benchmark-runner",
+         mixinStandardHelpOptions = true,
+         description = "Neo4j HTAP benchmark – open / closed arrival modes")
 public class BenchmarkRunner implements Callable<Integer> {
 
-    /* ---------------- CLI flags ---------------- */
-    @Option(names="--uri",     defaultValue="bolt://localhost:7687") String uri;
-    @Option(names="--user",    defaultValue="neo4j")                 String user;
-    @Option(names="--password",defaultValue="neo4j")                 String password;
-    @Option(names="--database",defaultValue="neo4j")                 String database;
+    /* ---------- CLI ---------- */
+    @Option(names="--uri",      defaultValue="bolt://localhost:7687") String uri;
+    @Option(names="--user",     defaultValue="neo4j")                 String user;
+    @Option(names="--password", defaultValue="neo4j")                 String password;
+    @Option(names="--database", defaultValue="neo4j")                 String database;
 
-    @Option(names="--oltp-clients",  defaultValue="8")  int oltpClients;
-    @Option(names="--graph-clients", defaultValue="1")  int graphClients;
-    @Option(names="--olap-clients",  defaultValue="1")  int olapClients;
+    @Option(names="--oltp-clients",  defaultValue="8") int oltpClients;
+    @Option(names="--graph-clients", defaultValue="1") int graphClients;
+    @Option(names="--olap-clients",  defaultValue="1") int olapClients;
 
     @Option(names={"-d","--duration"}, defaultValue="60") int durationSeconds;
     @Option(names={"-w","--warmup"},   defaultValue="10") int warmupSeconds;
 
     @Option(names="--arrival-mode", defaultValue="CLOSED") ArrivalMode arrivalMode;
-    @Option(names="--arrival-rate", arity="1..*", split=",") List<String> arrivalRatePairs = new ArrayList<>();
+    @Option(names="--arrival-rate", arity="1..*", split=",") List<String> λPairs = new ArrayList<>();
 
-    /* ---------------- constants ---------------- */
-    private static final int    SHARDS              = 10;      // # ArrivalTimer shards
-    private static final double SHARD_THRESHOLD_QPS = 1_000.0; // shard when λ ≥ this
-
-    /* ---------------- internal ---------------- */
+    /* ---------- state ---------- */
     private final Map<String,Double> λ = new HashMap<>();
-    private final List<Future<List<QueryResult>>> futures = new ArrayList<>();
+    private final List<QueryResult>  results =
+            Collections.synchronizedList(new ArrayList<>());
 
     public static void main(String[] args) {
         System.exit(new CommandLine(new BenchmarkRunner()).execute(args));
@@ -54,153 +56,123 @@ public class BenchmarkRunner implements Callable<Integer> {
     /* ================================================================ */
     @Override public Integer call() throws Exception {
 
-        Instant startTs = Instant.now();
+        Instant start = Instant.now();
         System.out.printf("Benchmark started at %s%n",
                 DateTimeFormatter.ISO_LOCAL_TIME.format(
-                        startTs.atZone(java.time.ZoneId.systemDefault()).toLocalTime()));
+                        start.atZone(java.time.ZoneId.systemDefault()).toLocalTime()));
 
-        /* ---------- parse λ from CLI ---------- */
-        arrivalRatePairs.stream()
-            .map(s->s.split("="))
-            .filter(a->a.length==2)
-            .forEach(a->λ.put(a[0].toUpperCase(Locale.ROOT),
-                              Double.parseDouble(a[1])));
+        λPairs.stream()
+              .map(s->s.split("="))
+              .filter(a->a.length==2)
+              .forEach(a->λ.put(a[0].toUpperCase(Locale.ROOT),
+                                Double.parseDouble(a[1])));
 
-        /* ---------- connect DB ---------- */
         DatabaseClient db = new Neo4jClient(uri,user,password,database,durationSeconds);
         db.connect();
 
-        /* ---------- prepare queries ---------- */
         QueryGenerator gen = new QueryGenerator(db);
-        Map<String,List<QueryTemplate.PreparedQuery>> prep = gen.prepareAllQueries();
-        Map<String,BlockingQueue<QueryTemplate.PreparedQuery>> qMap = new HashMap<>();
-        prep.forEach((k,v)->qMap.put(k,new LinkedBlockingQueue<>(v)));
+        Map<String,BlockingQueue<QueryTemplate.PreparedQuery>> qPool = new HashMap<>();
+        gen.prepareAllQueries()
+           .forEach((k,v)->qPool.put(k,new LinkedBlockingQueue<>(v)));
 
-        /* ---------- token queues (unbounded) ---------- */
-        BlockingQueue<Object> oltpTok  = new LinkedBlockingQueue<>();
-        BlockingQueue<Object> graphTok = new LinkedBlockingQueue<>();
-        BlockingQueue<Object> olapTok  = new LinkedBlockingQueue<>();
+        /* ---------- warm-up ---------- */
+        runClosed(db, warmupSeconds,
+                  oltpClients,graphClients,olapClients,
+                  qPool,true);
 
-        /* ---------- ArrivalTimer shards (OPEN) ---------- */
-        long phaseBEnd = System.currentTimeMillis() + durationSeconds*1000L;
-        ExecutorService timers    = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        /* ---------- measured ---------- */
+        if (arrivalMode==ArrivalMode.CLOSED)
+            runClosed(db,durationSeconds-warmupSeconds,
+                      oltpClients,graphClients,olapClients,
+                      qPool,false);
+        else
+            runOpen(db,durationSeconds-warmupSeconds,qPool);
 
-        if (arrivalMode == ArrivalMode.OPEN) {
-            startShardedTimers("OLTP",  λ.getOrDefault("OLTP",0.0),  oltpTok,  phaseBEnd, timers);
-            startShardedTimers("GRAPH", λ.getOrDefault("GRAPH",0.0), graphTok, phaseBEnd, timers);
-            startShardedTimers("OLAP",  λ.getOrDefault("OLAP",0.0),  olapTok,  phaseBEnd, timers);
-        }
-
-        /* ---------- Phase A – warm-up ---------- */
-        runPhase(db, warmupSeconds,
-                 oltpClients, graphClients, olapClients,
-                 qMap, oltpTok, graphTok, olapTok,
-                 true);
-
-        /* ---------- Phase B – measured ---------- */
-        List<QueryResult> results = runPhase(db, durationSeconds - warmupSeconds,
-                 oltpClients, graphClients, olapClients,
-                 qMap, oltpTok, graphTok, olapTok,
-                 false);
-
-        /* ---------- cleanup ---------- */
-        timers.shutdownNow();
-        db.close();
-
-        Map<String,Integer> workerMap = Map.of(
-                "OLTP",  oltpClients,
-                "GRAPH", graphClients,
-                "OLAP",  olapClients);
-
+        /* ---------- report ---------- */
         new MetricsAggregator(results,
-                            durationSeconds - warmupSeconds,
-                            "benchmark_results.csv",
-                            workerMap)
+                              durationSeconds-warmupSeconds,
+                              "benchmark_results.csv",
+                              Map.of("OLTP",oltpClients,
+                                     "GRAPH",graphClients,
+                                     "OLAP",olapClients))
             .printReport();
 
-        Instant endTs = Instant.now();
+        db.close();
         System.out.printf("Benchmark finished at %s (elapsed %s)%n",
                 DateTimeFormatter.ISO_LOCAL_TIME.format(
-                        endTs.atZone(java.time.ZoneId.systemDefault()).toLocalTime()),
-                human(Duration.between(startTs,endTs)));
-
+                        Instant.now()
+                               .atZone(java.time.ZoneId.systemDefault())
+                               .toLocalTime()),
+                human(Duration.between(start,Instant.now())));
         return 0;
     }
 
     /* ================================================================ */
-    private void startShardedTimers(String cat,
-                                    double lambda,
-                                    BlockingQueue<Object> tokQ,
-                                    long endMillis,
-                                    ExecutorService timers) {
+    private void runClosed(DatabaseClient db,int sec,
+                           int oltp,int graph,int olap,
+                           Map<String,BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
+                           boolean warm) throws InterruptedException {
 
-        if (lambda <= 0.0) return;
+        ExecutorService oltpPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        ExecutorService graphPool= Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        ExecutorService olapPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
+        long end = System.currentTimeMillis()+sec*1000L;
 
-        int shards = (lambda < SHARD_THRESHOLD_QPS) ? 1 : SHARDS;
-        double λPerShard = lambda / shards;
-
-        for (int i=0;i<shards;i++)
-            timers.execute(new ArrivalTimer(λPerShard, tokQ, endMillis));
-
-        System.out.printf("Started %d ArrivalTimer shard(s) for %s at %.0f qps each%n",
-                          shards, cat, λPerShard);
-    }
-
-    /* ---------- run a phase ---------- */
-    private List<QueryResult> runPhase(DatabaseClient db,
-                                       int sec,
-                                       int oltpThr,int graphThr,int olapThr,
-                                       Map<String,BlockingQueue<QueryTemplate.PreparedQuery>> qMap,
-                                       BlockingQueue<Object> oltpTok,
-                                       BlockingQueue<Object> graphTok,
-                                       BlockingQueue<Object> olapTok,
-                                       boolean warm) throws InterruptedException, ExecutionException {
-
-        ExecutorService oltpPool  = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
-        ExecutorService graphPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
-        ExecutorService olapPool  = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory());
-
-        long end = System.currentTimeMillis() + sec*1000L;
-
-        launchWorkers(db, oltpPool,  oltpThr,  qMap.get("OLTP"),
-                      arrivalMode==ArrivalMode.OPEN ? oltpTok  : null,
-                      "OLTP", end, warm);
-        launchWorkers(db, graphPool, graphThr, qMap.get("GRAPH"),
-                      arrivalMode==ArrivalMode.OPEN ? graphTok : null,
-                      "GRAPH", end, warm);
-        launchWorkers(db, olapPool,  olapThr,  qMap.get("OLAP"),
-                      arrivalMode==ArrivalMode.OPEN ? olapTok  : null,
-                      "OLAP", end, warm);
+        launch(db,oltpPool,oltp,qPool.get("OLTP"),"OLTP",end,warm,false);
+        launch(db,graphPool,graph,qPool.get("GRAPH"),"GRAPH",end,warm,false);
+        launch(db,olapPool, olap,qPool.get("OLAP"), "OLAP", end,warm,false);
 
         oltpPool.shutdown(); graphPool.shutdown(); olapPool.shutdown();
-        oltpPool.awaitTermination(5, TimeUnit.MINUTES);
-        graphPool.awaitTermination(5, TimeUnit.MINUTES);
-        olapPool.awaitTermination(5, TimeUnit.MINUTES);
-
-        List<QueryResult> out = new ArrayList<>();
-        for (Future<List<QueryResult>> f : futures) {
-            if (!warm) out.addAll(f.get()); else f.get();
-        }
-        futures.clear();
-        return out;
+        oltpPool.awaitTermination(5,TimeUnit.MINUTES);
+        graphPool.awaitTermination(5,TimeUnit.MINUTES);
+        olapPool.awaitTermination(5,TimeUnit.MINUTES);
     }
 
-    /* ---------- submit workers ---------- */
-    private void launchWorkers(DatabaseClient db,
-                               ExecutorService pool,
-                               int nThreads,
-                               BlockingQueue<QueryTemplate.PreparedQuery> q,
-                               BlockingQueue<Object> tokQ,
-                               String cat,
-                               long endMillis,
-                               boolean warm) {
-        for (int i=0;i<nThreads;i++)
-            futures.add(pool.submit(new ClientWorker(db,q,tokQ,cat,endMillis,warm)));
+    /* ---------- OPEN mode with bounded worker pool ---------- */
+    private void runOpen(DatabaseClient db,int sec,
+                         Map<String,BlockingQueue<QueryTemplate.PreparedQuery>> qPool)
+            throws InterruptedException {
+
+        int maxVThreads=512;                                      // cap
+        ExecutorService workerPool=
+                Executors.newFixedThreadPool(maxVThreads,Thread.ofVirtual().factory());
+
+        long endMs=System.currentTimeMillis()+sec*1000L;
+
+        /* Start each submitter on its own virtual thread */
+        List<Thread> submitters=new ArrayList<>();
+
+        if (λ.getOrDefault("OLTP",0.0)>0)
+            submitters.add(Thread.startVirtualThread(
+                new ArrivalSubmitter(λ.get("OLTP"),workerPool,db,
+                                     qPool.get("OLTP"),"OLTP",endMs,results)));
+
+        if (λ.getOrDefault("GRAPH",0.0)>0)
+            submitters.add(Thread.startVirtualThread(
+                new ArrivalSubmitter(λ.get("GRAPH"),workerPool,db,
+                                     qPool.get("GRAPH"),"GRAPH",endMs,results)));
+
+        if (λ.getOrDefault("OLAP",0.0)>0)
+            submitters.add(Thread.startVirtualThread(
+                new ArrivalSubmitter(λ.get("OLAP"),workerPool,db,
+                                     qPool.get("OLAP"),"OLAP",endMs,results)));
+
+        /* Wait for all arrival threads to finish */
+        for (Thread t:submitters) t.join();
+
+        /* Now it's safe to shut the worker pool */
+        workerPool.shutdown();
+        workerPool.awaitTermination(5,TimeUnit.MINUTES);
     }
 
-    /* ---------- pretty duration ---------- */
+    /* ---------- helpers ---------- */
+    private void launch(DatabaseClient db,ExecutorService pool,int n,
+                        BlockingQueue<QueryTemplate.PreparedQuery> q,
+                        String cat,long end,boolean warm,boolean singleShot){
+        for(int i=0;i<n;i++)
+            pool.submit(new ClientWorker(db,q,cat,end,warm,singleShot,results));
+    }
     private static String human(Duration d){
-        long s = d.getSeconds();
-        return String.format("%d:%02d.%03d", s/60, s%60, d.toMillisPart());
+        return String.format("%d:%02d.%03d",d.toMinutes(),d.toSecondsPart(),d.toMillisPart());
     }
 }

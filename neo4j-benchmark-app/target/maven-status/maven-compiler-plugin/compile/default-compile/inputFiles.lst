@@ -5,8 +5,7 @@
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/client/ClientWorker.java
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/client/DatabaseClient.java
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/client/Neo4jClient.java
-/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/arrival/ArrivalScheduler.java
+/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/arrival/ArrivalSubmitter.java
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/util/ResultsLogger.java
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/generator/QueryTemplate.java
-/home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/arrival/ArrivalTimer.java
 /home/phuoc-le/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/BenchmarkRunner.java
