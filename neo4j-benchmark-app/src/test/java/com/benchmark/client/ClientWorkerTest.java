@@ -2,59 +2,73 @@ package com.benchmark.client;
 
 import com.benchmark.generator.QueryTemplate;
 import com.benchmark.metrics.QueryResult;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.Mockito;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyMap;
 
-@ExtendWith(MockitoExtension.class)
 class ClientWorkerTest {
 
-    @Mock
-    private DatabaseClient mockDbClient;
-
-    private BlockingQueue<QueryTemplate.PreparedQuery> queryQueue;
-
-    @BeforeEach
-    void setUp() {
-        queryQueue = new LinkedBlockingQueue<>();
-        queryQueue.add(new QueryTemplate.PreparedQuery("MATCH (n) RETURN n", Collections.emptyMap()));
+    private static QueryTemplate.PreparedQuery dummyPQ() {
+        return new QueryTemplate.PreparedQuery("RETURN 1", Map.of());
     }
 
     @Test
-    void testWorkerExecutesQueryAndRecordsResult() throws Exception {
-        long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, false);
+    void singleShotWorkerRecordsOneResultWhenNotWarm() {
+        /* ---- Mockito stub: every method returns defaults ---- */
+        DatabaseClient dbMock = Mockito.mock(DatabaseClient.class);
+        Mockito.when(dbMock.executeQuery(any(), anyMap()))
+               .thenReturn(Collections.emptyList());
 
-        List<QueryResult> results = worker.call();
+        BlockingQueue<QueryTemplate.PreparedQuery> qPool = new LinkedBlockingQueue<>();
+        qPool.add(dummyPQ());
 
-        verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
-        assertFalse(results.isEmpty());
-        assertEquals("OLTP", results.get(0).category());
-        assertTrue(results.get(0).latencyNanos() > 0);
+        List<QueryResult> collector = Collections.synchronizedList(new ArrayList<>());
+
+        ClientWorker worker = new ClientWorker(
+                dbMock,
+                qPool,
+                "OLTP",
+                System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(5),
+                /* warm */ false,
+                /* singleShot */ true,
+                collector);
+
+        worker.run();
+
+        assertEquals(1, collector.size());
+        assertEquals("OLTP", collector.get(0).category());
     }
 
     @Test
-    void testWarmupRunDoesNotRecordResults() throws Exception {
-        long endTime = System.currentTimeMillis() + 100;
-        ClientWorker worker = new ClientWorker(mockDbClient, queryQueue, "OLTP", endTime, true);
+    void warmWorkerDoesNotRecordResults() {
+        DatabaseClient dbMock = Mockito.mock(DatabaseClient.class);
+        Mockito.when(dbMock.executeQuery(any(), anyMap()))
+               .thenReturn(Collections.emptyList());
 
-        List<QueryResult> results = worker.call();
+        BlockingQueue<QueryTemplate.PreparedQuery> qPool = new LinkedBlockingQueue<>();
+        qPool.add(dummyPQ());
 
-        verify(mockDbClient, atLeastOnce()).executeQuery(anyString(), any(Map.class));
-        assertTrue(results.isEmpty());
+        List<QueryResult> collector = Collections.synchronizedList(new ArrayList<>());
+
+        ClientWorker worker = new ClientWorker(
+                dbMock,
+                qPool,
+                "GRAPH",
+                System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(5),
+                /* warm */ true,
+                /* singleShot */ true,
+                collector);
+
+        worker.run();
+
+        assertEquals(0, collector.size());
     }
 }
