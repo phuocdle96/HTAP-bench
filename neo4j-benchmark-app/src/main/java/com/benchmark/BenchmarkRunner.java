@@ -33,6 +33,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
+import java.io.IOException;
 
 @Command(name="benchmark-runner", mixinStandardHelpOptions = true,
         description = "Neo4j HTAP benchmark – open / closed arrival modes")
@@ -259,7 +260,11 @@ public class BenchmarkRunner implements Callable<Integer> {
                     "OLAP", current.getOrDefault("OLAP",0)
             );
             System.out.printf("%n=== Interval %d (CLOSED) — %d s ===%n", interval, sec);
-            new MetricsAggregator(slice, sec, CSV_OUT, workersMeta).printReport();
+            try {
+                new MetricsAggregator(slice, sec, CSV_OUT, workersMeta).printReport();
+            } catch (IOException e) {
+                System.err.println("Interval CSV write failed: " + e.getMessage());
+            }
 
             // ----- Ramp clients for next interval -----
             bumpInt(current, "OLTP", rampClients, maxClients);
@@ -326,7 +331,11 @@ public class BenchmarkRunner implements Callable<Integer> {
                     "OLAP", shardsOLAP
             );
             System.out.printf("%n=== Interval %d (OPEN) — %d s ===%n", interval, sec);
-            new MetricsAggregator(slice, sec, CSV_OUT, workersMeta).printReport();
+            try {
+                new MetricsAggregator(slice, sec, CSV_OUT, workersMeta).printReport();
+            } catch (IOException e) {
+                System.err.println("Interval CSV write failed: " + e.getMessage());
+            }
 
             // ----- Ramp λ for next interval -----
             bumpDouble(cur, "OLTP", rampRate, maxRate);
