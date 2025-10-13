@@ -1,59 +1,56 @@
 package com.benchmark.generator;
 
 import com.benchmark.client.DatabaseClient;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
 class QueryGeneratorTest {
 
-    @Mock
-    private DatabaseClient mockDbClient;
+    /** Minimal fake DB that returns deterministic sample IDs and echoes queries. */
+    private static class FakeDb implements DatabaseClient {
+        @Override public void connect() { /* no-op */ }
 
-    private QueryGenerator queryGenerator;
+        @Override
+        public List<Map<String, Object>> executeQuery(String text, Map<String, Object> params) {
+            // pretend the DB returned one row with whatever we sent
+            return List.of(Map.of("text", text, "params", params == null ? Map.of() : params));
+        }
 
-    @BeforeEach
-    void setUp() {
-        when(mockDbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("patient1"));
-        when(mockDbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("unit1"));
-        when(mockDbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"))
-                .thenReturn(List.of("diag1"));
-        when(mockDbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("adm1"));
-        
-        queryGenerator = new QueryGenerator(mockDbClient);
+        @Override
+        public List<String> fetchSampleIds(String label, String idProperty) {
+            // provide a small fixed set of IDs so parameterized templates can materialize
+            return List.of("1", "2", "3", "4", "5");
+        }
+
+        @Override public void close() { /* no-op */ }
     }
 
     @Test
-    void testTemplatesAreLoaded() {
-        assertNotNull(queryGenerator);
-    }
+    void prepareAllQueries_producesNonEmptyPools() {
+        DatabaseClient db = new FakeDb();
 
-    @Test
-    void testPrepareAllQueriesGeneratesData() {
-        Map<String, List<QueryTemplate.PreparedQuery>> preparedQueries = queryGenerator.prepareAllQueries();
+        // NOTE: QueryGenerator now requires an Engine argument
+        QueryGenerator gen = new QueryGenerator(db, QueryGenerator.Engine.NEO4J);
 
-        assertNotNull(preparedQueries);
-        assertFalse(preparedQueries.isEmpty());
-        assertTrue(preparedQueries.containsKey("OLTP"));
-        
-        List<QueryTemplate.PreparedQuery> oltpQueries = preparedQueries.get("OLTP");
-        assertFalse(oltpQueries.isEmpty());
-        
-        QueryTemplate.PreparedQuery firstQuery = oltpQueries.get(0);
-        assertNotNull(firstQuery.cypher());
-        assertNotNull(firstQuery.params());
+        Map<String, List<QueryTemplate.PreparedQuery>> pools = gen.prepareAllQueries();
+
+        assertNotNull(pools, "pools map must not be null");
+        assertTrue(pools.containsKey("OLTP"),  "missing OLTP pool");
+        assertTrue(pools.containsKey("GRAPH"), "missing GRAPH pool");
+        assertTrue(pools.containsKey("OLAP"),  "missing OLAP pool");
+
+        // each category has at least one prepared query
+        assertFalse(pools.get("OLTP").isEmpty(),  "OLTP pool is empty");
+        assertFalse(pools.get("GRAPH").isEmpty(), "GRAPH pool is empty");
+        assertFalse(pools.get("OLAP").isEmpty(),  "OLAP pool is empty");
+
+        // spot-check instances are non-null
+        assertNotNull(pools.get("OLTP").getFirst(),  "first OLTP prepared query is null");
+        assertNotNull(pools.get("GRAPH").getFirst(), "first GRAPH prepared query is null");
+        assertNotNull(pools.get("OLAP").getFirst(),  "first OLAP prepared query is null");
     }
 }

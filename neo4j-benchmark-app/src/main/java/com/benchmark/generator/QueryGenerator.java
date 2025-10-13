@@ -1,79 +1,104 @@
 package com.benchmark.generator;
 
 import com.benchmark.client.DatabaseClient;
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.lang.reflect.Type;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
+import static com.benchmark.generator.QueryLanguage.CYPHER;
+import static com.benchmark.generator.QueryLanguage.GREMLIN;
+
 public class QueryGenerator {
-    private final List<QueryTemplate> templates;
-    private final Map<String, List<String>> sampleIds = new HashMap<>();
 
-    public QueryGenerator(DatabaseClient dbClient) {
-        this.templates = loadTemplates();
-        fetchSampleIds(dbClient);
-    }
+    public enum Engine { NEO4J, MEMGRAPH, JANUSGRAPH }
 
-    private List<QueryTemplate> loadTemplates() {
-        try (InputStream is = getClass().getClassLoader().getResourceAsStream("queries.json")) {
-            if (is == null) throw new RuntimeException("Cannot find queries.json in resources.");
-            InputStreamReader reader = new InputStreamReader(is);
-            Type listType = new TypeToken<ArrayList<QueryTemplate>>() {}.getType();
-            return new Gson().fromJson(reader, listType);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load or parse query templates.", e);
-        }
-    }
-    
-    private void fetchSampleIds(DatabaseClient dbClient) {
-        System.out.println("Fetching sample IDs for parameter generation...");
-        sampleIds.put("patientid", dbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"));
-        sampleIds.put("unitid", dbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"));
-        sampleIds.put("diagnosiscode", dbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"));
-        sampleIds.put("admissionid", dbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"));
-        System.out.println("Sample IDs fetched.");
-    }
-    
-    private Object getRandomParamValue(String paramName) {
-        String key = paramName.toLowerCase();
-        List<String> idList = sampleIds.get(key);
+    private final DatabaseClient db;
+    private final Engine engine;
 
-        if (idList != null && !idList.isEmpty()) {
-            return idList.get(ThreadLocalRandom.current().nextInt(idList.size()));
-        }
-        
-        return switch (key) {
-            case "year" -> String.valueOf(ThreadLocalRandom.current().nextInt(2008, 2012));
-            case "admissiondate" -> {
-                int year = ThreadLocalRandom.current().nextInt(2008, 2012);
-                int month = ThreadLocalRandom.current().nextInt(1, 13);
-                int day = ThreadLocalRandom.current().nextInt(1, 29); // Keep it simple
-                yield String.format("%04d%02d%02d", year, month, day);
-            }
-            default -> UUID.randomUUID().toString(); // Default for new IDs
-        };
+    private List<String> patientIds = List.of();
+    private List<String> unitIds    = List.of();
+    private List<String> diagCodes  = List.of();
+
+    public QueryGenerator(DatabaseClient db, Engine engine) {
+        this.db = db;
+        this.engine = engine;
+        loadSamples();
     }
 
     public Map<String, List<QueryTemplate.PreparedQuery>> prepareAllQueries() {
-        Map<String, List<QueryTemplate.PreparedQuery>> categorizedQueries = new HashMap<>();
-        for (QueryTemplate template : templates) {
-            categorizedQueries.computeIfAbsent(template.category(), k -> new ArrayList<>());
+        Map<String, List<QueryTemplate.PreparedQuery>> m = new HashMap<>();
+        m.put("OLTP",  buildOltpPool(10_000));   // tune pool sizes as you like
+        m.put("GRAPH", buildGraphPool( 2_000));
+        m.put("OLAP",  buildOlapPool(    500));
+        return m;
+    }
 
-            int numVariations = "OLTP".equals(template.category()) ? 5000 : 500;
-            
-            for(int i = 0; i < numVariations; i++) {
-                Map<String, Object> params = new HashMap<>();
-                for (String paramName : template.params()) {
-                    params.put(paramName, getRandomParamValue(paramName));
-                }
-                categorizedQueries.get(template.category()).add(new QueryTemplate.PreparedQuery(template.cypher(), params));
+    /* ---------------- Internal ---------------- */
+
+    private void loadSamples() {
+        // Try to gather enough IDs for randomization; fall back to synthetic values
+        try {
+            patientIds = db.fetchSampleIds("Patient", "patientId");
+            unitIds    = db.fetchSampleIds("HealthcareUnit", "unitId");
+            diagCodes  = db.fetchSampleIds("Diagnosis", "code");
+        } catch (Exception ignore) { /* keep defaults if unavailable */ }
+
+        if (patientIds.isEmpty()) patientIds = synthetic("P%05d", 1_000);
+        if (unitIds.isEmpty())    unitIds    = synthetic("U%03d",  100);
+        if (diagCodes.isEmpty())  diagCodes  = synthetic("D%03d",  500);
+    }
+
+    private static List<String> synthetic(String fmt, int n) {
+        List<String> out = new ArrayList<>(n);
+        for (int i=0;i<n;i++) out.add(String.format(Locale.ROOT, fmt, i));
+        return out;
+    }
+
+    private List<QueryTemplate.PreparedQuery> buildOltpPool(int n) {
+        List<QueryTemplate.PreparedQuery> out = new ArrayList<>(n);
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        for (int i=0;i<n;i++) {
+            String id = patientIds.get(rnd.nextInt(patientIds.size()));
+            if (engine == Engine.JANUSGRAPH) {
+                String g = "g.V().has('Patient','patientId', id).limit(1).valueMap(true)";
+                out.add(new QueryTemplate.PreparedQuery(GREMLIN, g, Map.of("id", id)));
+            } else {
+                String c = "MATCH (p:Patient {patientId:$id}) RETURN p LIMIT 1";
+                out.add(new QueryTemplate.PreparedQuery(CYPHER, c, Map.of("id", id)));
             }
         }
-        return categorizedQueries;
+        return out;
+    }
+
+    private List<QueryTemplate.PreparedQuery> buildGraphPool(int n) {
+        List<QueryTemplate.PreparedQuery> out = new ArrayList<>(n);
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        for (int i=0;i<n;i++) {
+            String id = patientIds.get(rnd.nextInt(patientIds.size()));
+            if (engine == Engine.JANUSGRAPH) {
+                String g = "g.V().has('Patient','patientId', id).both('VISITED','DIAGNOSED').limit(20).valueMap(true)";
+                out.add(new QueryTemplate.PreparedQuery(GREMLIN, g, Map.of("id", id)));
+            } else {
+                String c = "MATCH (p:Patient {patientId:$id})-[:VISITED|:DIAGNOSED]->(x) RETURN x LIMIT 20";
+                out.add(new QueryTemplate.PreparedQuery(CYPHER, c, Map.of("id", id)));
+            }
+        }
+        return out;
+    }
+
+    private List<QueryTemplate.PreparedQuery> buildOlapPool(int n) {
+        List<QueryTemplate.PreparedQuery> out = new ArrayList<>(n);
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        for (int i=0;i<n;i++) {
+            String u = unitIds.get(rnd.nextInt(unitIds.size()));
+            if (engine == Engine.JANUSGRAPH) {
+                String g = "g.V().has('HealthcareUnit','unitId', u).in('ADMITTED_TO').count()";
+                out.add(new QueryTemplate.PreparedQuery(GREMLIN, g, Map.of("u", u)));
+            } else {
+                String c = "MATCH (:HealthcareUnit {unitId:$u})<-[:ADMITTED_TO]-(:Admission) RETURN count(*) AS c";
+                out.add(new QueryTemplate.PreparedQuery(CYPHER, c, Map.of("u", u)));
+            }
+        }
+        return out;
     }
 }

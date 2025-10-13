@@ -28,6 +28,13 @@
       <version>5.19.0</version>
     </dependency>
 
+    <!-- Gremlin driver for JanusGraph -->
+    <dependency>
+      <groupId>org.apache.tinkerpop</groupId>
+      <artifactId>gremlin-driver</artifactId>
+      <version>3.6.6</version>
+    </dependency>
+
     <!-- picocli (CLI parser) -->
     <dependency>
       <groupId>info.picocli</groupId>
