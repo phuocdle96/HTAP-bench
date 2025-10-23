@@ -27,7 +27,7 @@ public class QueryGenerator {
 
     public Map<String, List<QueryTemplate.PreparedQuery>> prepareAllQueries() {
         Map<String, List<QueryTemplate.PreparedQuery>> m = new HashMap<>();
-        m.put("OLTP",  buildOltpPool(10_000));   // tune pool sizes as you like
+        m.put("OLTP",  buildOltpPool(10_000));
         m.put("GRAPH", buildGraphPool( 2_000));
         m.put("OLAP",  buildOlapPool(    500));
         return m;
@@ -36,12 +36,11 @@ public class QueryGenerator {
     /* ---------------- Internal ---------------- */
 
     private void loadSamples() {
-        // Try to gather enough IDs for randomization; fall back to synthetic values
         try {
             patientIds = db.fetchSampleIds("Patient", "patientId");
             unitIds    = db.fetchSampleIds("HealthcareUnit", "unitId");
             diagCodes  = db.fetchSampleIds("Diagnosis", "code");
-        } catch (Exception ignore) { /* keep defaults if unavailable */ }
+        } catch (Exception ignore) { /* fall back below */ }
 
         if (patientIds.isEmpty()) patientIds = synthetic("P%05d", 1_000);
         if (unitIds.isEmpty())    unitIds    = synthetic("U%03d",  100);

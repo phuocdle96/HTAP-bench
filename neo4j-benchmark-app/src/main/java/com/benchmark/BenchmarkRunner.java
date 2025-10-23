@@ -8,15 +8,13 @@
 //  • Safe bounded worker pool; sharded submitters with per-shard QPS cap
 //  • Warmup runs in CLOSED mode
 //  • Catches IOException from MetricsAggregator.printReport()
-//  • NEW: compute single-interval duration once, CSV per interval, queue pressure logs
+//  • --engine switch: NEO4J | MEMGRAPH | JANUSGRAPH
 //
 package com.benchmark;
 
 import com.benchmark.arrival.ArrivalMode;
 import com.benchmark.arrival.ArrivalSubmitter;
-import com.benchmark.client.ClientWorker;
-import com.benchmark.client.DatabaseClient;
-import com.benchmark.client.Neo4jClient;
+import com.benchmark.client.*;
 import com.benchmark.generator.QueryGenerator;
 import com.benchmark.generator.QueryTemplate;
 import com.benchmark.metrics.MetricsAggregator;
@@ -129,13 +127,12 @@ public class BenchmarkRunner implements Callable<Integer> {
         Map<String, Double> rampStep = parseDoubleMap(rampRatePairs);
         Map<String, Double> maxRate  = parseDoubleMap(maxRatePairs);
 
-        /* ---------- connect DB ---------- */
-        DatabaseClient db = new Neo4jClient(uri, user, password, database, durationSeconds);
+        /* ---------- connect DB (engine switch) ---------- */
+        DatabaseClient db = createClient(engineName, uri, user, password, database, durationSeconds);
         db.connect();
 
         /* ---------- prepare all queries ---------- */
-        QueryGenerator.Engine engine =
-                QueryGenerator.Engine.valueOf(engineName.toUpperCase(Locale.ROOT));
+        QueryGenerator.Engine engine = QueryGenerator.Engine.valueOf(engineName.toUpperCase(Locale.ROOT));
         QueryGenerator gen = new QueryGenerator(db, engine);
         Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool = new HashMap<>();
         gen.prepareAllQueries().forEach((k, v) -> qPool.put(k, new LinkedBlockingQueue<>(v)));
@@ -192,6 +189,34 @@ public class BenchmarkRunner implements Callable<Integer> {
         return 0;
     }
 
+    private static DatabaseClient createClient(String engineName,
+                                               String uri,
+                                               String user,
+                                               String password,
+                                               String database,
+                                               int timeoutSeconds) {
+        switch (engineName.toUpperCase(Locale.ROOT)) {
+            case "NEO4J":
+                return new Neo4jClient(uri, user, password, database, timeoutSeconds);
+            case "MEMGRAPH":
+                // Memgraph ignores database; empty user/pass OK if server allows it.
+                return new MemgraphClient(uri, user, password);
+            case "JANUSGRAPH":
+                // Expect gremlin://host:port or bolt-ish value where we extract host:port
+                String host; int port;
+                String u = uri.replace("gremlin://", "").replace("ws://", "").replace("wss://", "");
+                if (u.contains(":")) {
+                    String[] hp = u.split(":", 2);
+                    host = hp[0]; port = Integer.parseInt(hp[1]);
+                } else {
+                    host = u; port = 8182; // default Gremlin Server port
+                }
+                return new JanusGraphClient(host, port);
+            default:
+                throw new IllegalArgumentException("Unknown --engine: " + engineName);
+        }
+    }
+
     /* ============================ CLOSED (measured) ============================ */
     private void runMeasuredClosed(DatabaseClient db,
                                    ThreadPoolExecutor workers,
@@ -228,13 +253,10 @@ public class BenchmarkRunner implements Callable<Integer> {
                                                Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
                                                long measureEnd) {
 
-        int seconds = Math.max(1, (int)((measureEnd - System.currentTimeMillis()) / 1000));
-        System.out.printf("OPEN mode (measured): single interval of %d s%n", seconds);
+        System.out.printf("OPEN mode (measured): single interval of %d s%n",
+                Math.max(1, (measureEnd - System.currentTimeMillis()) / 1000));
 
-        // Interval-scoped results
         List<QueryResult> intervalResults = Collections.synchronizedList(new ArrayList<>());
-
-        long intervalStart = System.currentTimeMillis();
 
         List<Thread> submitters = new ArrayList<>();
         submitters.addAll(startShardedSubmitters("OLTP", λ.getOrDefault("OLTP", 0.0), workers, db, qPool.get("OLTP"),  measureEnd, intervalResults));
@@ -245,13 +267,8 @@ public class BenchmarkRunner implements Callable<Integer> {
             try { t.join(); } catch (InterruptedException ignored) {}
         }
 
-        // compute actual duration once
-        int secs = Math.max(1, (int)Math.ceil(intervalDurationSeconds(intervalStart, measureEnd)));
-
-        // queue pressure snapshot
-        System.out.printf("workers: active=%d queued=%d%n", workers.getActiveCount(), workers.getQueue().size());
-
-        printIntervalReport("interval-01 (OPEN single)", intervalResults, secs, "benchmark_results_interval01.csv");
+        int secs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(System.currentTimeMillis(), measureEnd)));
+        printIntervalReport("interval-01 (OPEN single)", intervalResults, secs);
         results.addAll(intervalResults);
     }
 
@@ -272,30 +289,22 @@ public class BenchmarkRunner implements Callable<Integer> {
 
         System.out.printf("OPEN mode (measured): %d interval(s) of %d s%n", intervals, intervalSec);
 
-        // Working copy of λ we mutate each interval
         Map<String, Double> current = new HashMap<>(λ);
 
         for (int idx = 1; idx <= intervals; idx++) {
             long intervalStart = System.currentTimeMillis();
             long plannedEnd = intervalStart + intervalSec * 1000L;
             long intervalEnd = Math.min(plannedEnd, measureEnd);
-
-            // The last interval might be shorter
             int actualSecs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(intervalStart, intervalEnd)));
 
             String intervalName = String.format(Locale.ROOT,
                     "interval-%02d (OPEN, λ OLTP=%s GRAPH=%s OLAP=%s)",
-                    idx,
-                    fmtRate(current.get("OLTP")),
-                    fmtRate(current.get("GRAPH")),
-                    fmtRate(current.get("OLAP")));
+                    idx, fmtRate(current.get("OLTP")), fmtRate(current.get("GRAPH")), fmtRate(current.get("OLAP")));
 
             System.out.printf("Launching %s OPEN submitters...%n", intervalName);
 
-            // Fresh interval results
             List<QueryResult> intervalResults = Collections.synchronizedList(new ArrayList<>());
 
-            // Start submitters
             List<Thread> submitters = new ArrayList<>();
             submitters.addAll(startShardedSubmitters("OLTP", current.getOrDefault("OLTP", 0.0), workers, db, qPool.get("OLTP"),  intervalEnd, intervalResults));
             submitters.addAll(startShardedSubmitters("GRAPH", current.getOrDefault("GRAPH", 0.0), workers, db, qPool.get("GRAPH"), intervalEnd, intervalResults));
@@ -305,22 +314,11 @@ public class BenchmarkRunner implements Callable<Integer> {
                 try { t.join(); } catch (InterruptedException ignored) {}
             }
 
-            System.out.printf("%n--- Interval Completed: %s ---%n", intervalName);
-            System.out.printf("workers: active=%d queued=%d%n", workers.getActiveCount(), workers.getQueue().size());
-
-            // CSV file per interval
-            String csvName = "benchmark_results_" + intervalName.replaceAll("\\s+","_").replaceAll("[()=,]","") + ".csv";
-
-            // Interval-only report
-            printIntervalReport(intervalName, intervalResults, actualSecs, csvName);
-
-            // Add to global accumulation for the final summary
+            System.out.printf("%n--- Interval Completed: %s ---%n%n", intervalName);
+            printIntervalReport(intervalName, intervalResults, actualSecs);
             results.addAll(intervalResults);
 
-            // Bump rates for next interval (if any)
-            if (idx < intervals) {
-                bumpRate(current, rampStep, maxRate);
-            }
+            if (idx < intervals) bumpRate(current, rampStep, maxRate);
         }
     }
 
@@ -328,7 +326,7 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     private static String fmtRate(Double d) {
         if (d == null) return "0.0";
-        if (d < 1.0) return String.format(Locale.ROOT, "%.2f", d); // OLAP often fractional
+        if (d < 1.0) return String.format(Locale.ROOT, "%.2f", d);
         return String.format(Locale.ROOT, "%.0f", d);
     }
 
@@ -350,13 +348,12 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     private void printIntervalReport(String intervalName,
                                      List<QueryResult> intervalResults,
-                                     int actualIntervalSecs,
-                                     String csvName) {
+                                     int actualIntervalSecs) {
         try {
             new MetricsAggregator(
                     intervalResults,
                     Math.max(1, actualIntervalSecs),
-                    csvName, // write CSV per interval
+                    null, // no per-interval CSV by default
                     Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients)
             ).printReport();
         } catch (IOException ioe) {

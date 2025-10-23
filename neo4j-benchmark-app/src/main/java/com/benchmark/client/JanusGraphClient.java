@@ -1,13 +1,11 @@
 package com.benchmark.client;
 
-import org.apache.tinkerpop.gremlin.driver.Client;
-import org.apache.tinkerpop.gremlin.driver.Cluster;
-import org.apache.tinkerpop.gremlin.driver.Result;
-import org.apache.tinkerpop.gremlin.driver.ResultSet;
+import com.benchmark.generator.QueryLanguage;
+import com.benchmark.generator.QueryTemplate;
+import org.apache.tinkerpop.gremlin.driver.*;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
@@ -31,20 +29,21 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         this.client = cluster.connect();
     }
 
+    /** Generic GREMLIN submit (used by executePrepared and fetchSampleIds) */
     @Override
     public List<Map<String, Object>> executeQuery(String script, Map<String, Object> params) {
         try {
-            Map<String, Object> bindings = (params == null) ? Collections.emptyMap() : params;
+            Map<String, Object> bindings = (params == null) ? Map.of() : params;
             ResultSet rs = client.submit(script, bindings);
             List<Result> all = rs.all().get(60, TimeUnit.SECONDS);
 
             List<Map<String, Object>> out = new ArrayList<>(all.size());
             for (Result r : all) {
                 Object o = r.getObject();
-                if (o instanceof Map) {
+                if (o instanceof Map<?,?> m) {
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> m = (Map<String, Object>) o;
-                    out.add(m);
+                    Map<String,Object> mm = (Map<String,Object>) m;
+                    out.add(mm);
                 } else {
                     out.add(Map.of("value", o));
                 }
@@ -55,22 +54,29 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         }
     }
 
+    /** IMPORTANT: JanusGraph must handle GREMLIN prepared queries. */
+    @Override
+    public List<Map<String, Object>> executePrepared(QueryTemplate.PreparedQuery pq) {
+        if (pq.lang == QueryLanguage.GREMLIN) {
+            return executeQuery(pq.text, pq.params);
+        }
+        throw new UnsupportedOperationException("JanusGraph client only supports GREMLIN here");
+    }
+
     @Override
     public List<String> fetchSampleIds(String label, String idProperty) {
-        // Gremlin query: g.V().hasLabel(label).values(idProperty).limit(1000)
-        String script = "g.V().hasLabel(label).values(idProp).limit(1000)";
-        Map<String, Object> params = new HashMap<>();
-        params.put("label", label);
-        params.put("idProp", idProperty);
+        // Keep it simple & capped
+        String script = "g.V().hasLabel(label).values(idProp).dedup().limit(cap)";
+        Map<String, Object> bindings = Map.of("label", label, "idProp", idProperty, "cap", 1_000);
 
-        List<Map<String, Object>> rows = executeQuery(script, params);
-        // values() typically returns scalars; we added them under key "value" above.
-        return rows.stream()
-                .map(m -> m.getOrDefault("value", m.get("id")))
-                .filter(Objects::nonNull)
-                .map(String::valueOf)
-                .filter(s -> !s.isBlank())
-                .collect(Collectors.toList());
+        List<Map<String, Object>> rows = executeQuery(script, bindings);
+        // For scalar values we put them under key "value" in executeQuery
+        List<String> out = new ArrayList<>(rows.size());
+        for (Map<String,Object> m : rows) {
+            Object v = m.get("value");
+            if (v != null) out.add(String.valueOf(v));
+        }
+        return out;
     }
 
     @Override
