@@ -5,7 +5,6 @@ import com.benchmark.metrics.QueryResult;
 
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 public class ClientWorker implements Runnable {
 
@@ -37,17 +36,21 @@ public class ClientWorker implements Runnable {
     public void run() {
         try {
             do {
-                QueryTemplate.PreparedQuery pq = qPool.take(); // your pool stays the same
+                QueryTemplate.PreparedQuery pq = qPool.take();
                 long t0 = System.nanoTime();
                 try {
-                    db.executePrepared(pq); // <-- unified hook (Cypher or Gremlin)
+                    db.executePrepared(pq); // Cypher or Gremlin depending on pq.lang and client
                     long dt = System.nanoTime() - t0;
                     if (!warmup) {
                         results.add(new QueryResult(category, dt));
                     }
+                } catch (Exception e) {
+                    // Make failures visible so categories don't silently disappear
+                    String snippet = pq.text.length() > 120 ? pq.text.substring(0, 120) + "..." : pq.text;
+                    System.err.println("[ERR][" + category + "] " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                    System.err.println("   Query: " + pq.lang + " :: " + snippet);
                 } finally {
-                    // recycle
-                    qPool.offer(pq);
+                    qPool.offer(pq); // recycle
                 }
                 if (singleShot) break;
             } while (System.currentTimeMillis() < endWallClockMillis);
