@@ -57,6 +57,24 @@
       <version>2.11.0</version>
     </dependency>
 
+    <!-- JSON parsing for queries.json -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.17.2</version>
+    </dependency>
+    <!-- (optional; databind will pull core/annotations transitively) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+      <version>2.17.2</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+      <version>2.17.2</version>
+    </dependency>
+
     <!-- Commons-Math: DescriptiveStatistics for MetricsAggregator -->
     <dependency>
       <groupId>org.apache.commons</groupId>
@@ -145,3 +163,4 @@
   </build>
 
 </project>
+

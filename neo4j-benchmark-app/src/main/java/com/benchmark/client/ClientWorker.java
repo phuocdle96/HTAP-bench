@@ -3,7 +3,10 @@ package com.benchmark.client;
 import com.benchmark.generator.QueryTemplate;
 import com.benchmark.metrics.QueryResult;
 
+import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 
 public class ClientWorker implements Runnable {
@@ -36,26 +39,68 @@ public class ClientWorker implements Runnable {
     public void run() {
         try {
             do {
-                QueryTemplate.PreparedQuery pq = qPool.take();
-                long t0 = System.nanoTime();
-                try {
-                    db.executePrepared(pq); // Cypher or Gremlin depending on pq.lang and client
-                    long dt = System.nanoTime() - t0;
-                    if (!warmup) {
-                        results.add(new QueryResult(category, dt));
+                // Take a template query from the pool
+                final QueryTemplate.PreparedQuery template = qPool.take();
+
+                // Up to 3 attempts if we hit a unique-eventId collision
+                int attempts = 0;
+                while (true) {
+                    attempts++;
+
+                    // Clone params per execution; inject a fresh admissionId when present
+                    Map<String, Object> execParams = template.params;
+                    boolean mutateId = execParams != null && execParams.containsKey("admissionId");
+                    if (mutateId) {
+                        execParams = new HashMap<>(execParams);
+                        execParams.put("admissionId", java.util.UUID.randomUUID().toString());
+                        if (execParams.containsKey("admissionDate")) {
+                            execParams.put("admissionDate", LocalDate.now().toString());
+                        }
                     }
-                } catch (Exception e) {
-                    // Make failures visible so categories don't silently disappear
-                    String snippet = pq.text.length() > 120 ? pq.text.substring(0, 120) + "..." : pq.text;
-                    System.err.println("[ERR][" + category + "] " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                    System.err.println("   Query: " + pq.lang + " :: " + snippet);
-                } finally {
-                    qPool.offer(pq); // recycle
+
+                    QueryTemplate.PreparedQuery exec =
+                            new QueryTemplate.PreparedQuery(template.lang, template.text, execParams);
+
+                    long t0 = System.nanoTime();
+                    try {
+                        db.executePrepared(exec);
+                        long dt = System.nanoTime() - t0;
+                        if (!warmup) {
+                            results.add(new QueryResult(category, dt));
+                        }
+                        break; // success
+                    } catch (Throwable t) {
+                        String msg = String.valueOf(t.getMessage());
+                        boolean duplicateId =
+                                msg.contains("already exists with label `Event` and property `eventId`")
+                                || msg.contains("already exists with label 'Event' and property 'eventId'")
+                                || msg.contains("ConstraintValidationFailed");
+
+                        if (duplicateId && attempts < 4) {
+                            // Generate a new UUID and retry
+                            continue;
+                        }
+
+                        System.err.printf("[ERR][%s] %s: %s%n   Query: %s :: %s%n",
+                                category, t.getClass().getSimpleName(), msg,
+                                exec.lang, truncate(exec.text, 200));
+                        break;
+                    }
                 }
+
+                // Return the template to the pool
+                qPool.offer(template);
+
                 if (singleShot) break;
             } while (System.currentTimeMillis() < endWallClockMillis);
-        } catch (InterruptedException ignored) {
+        } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
     }
+
+    private static String truncate(String s, int max) {
+        if (s == null || s.length() <= max) return s;
+        return s.substring(0, max) + "...";
+    }
 }
+

@@ -1,3 +1,4 @@
+// src/main/java/com/benchmark/client/JanusGraphClient.java
 package com.benchmark.client;
 
 import com.benchmark.generator.QueryLanguage;
@@ -45,7 +46,6 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
             for (Result r : all) {
                 Object o = r.getObject();
-                // Unwrap Optional if server returns Optional<T>
                 if (o instanceof Optional<?> opt) {
                     o = opt.orElse(null);
                 }
@@ -58,12 +58,18 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
                 }
             }
             return out;
-        } catch (ResponseException re) {
-            // Print remote error details to help diagnose label/prop issues
-            String msg = re.getMessage();
-            String remote = (re.getRemoteStackTrace() == null) ? "" : ("\nRemote stack:\n" + re.getRemoteStackTrace());
-            throw new RuntimeException("Gremlin submit failed: " + msg + remote, re);
+
         } catch (Exception e) {
+            // If Gremlin Server returned a remote error, surface details.
+            Throwable cause = e instanceof ResponseException ? e
+                    : (e.getCause() instanceof ResponseException ? e.getCause() : e);
+
+            if (cause instanceof ResponseException re) {
+                String msg = re.getMessage();
+                String remote = (re.getRemoteStackTrace() == null) ? ""
+                        : ("\nRemote stack:\n" + re.getRemoteStackTrace());
+                throw new RuntimeException("Gremlin submit failed: " + msg + remote, re);
+            }
             throw new RuntimeException("Gremlin submit failed", e);
         }
     }
@@ -79,7 +85,6 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public List<String> fetchSampleIds(String label, String idProperty) {
-        // Keep it simple & capped
         String script = "g.V().hasLabel(label).values(idProp).dedup().limit(cap)";
         Map<String, Object> bindings = Map.of(
                 "label", label,
@@ -106,3 +111,4 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         if (cluster != null) cluster.close();
     }
 }
+
