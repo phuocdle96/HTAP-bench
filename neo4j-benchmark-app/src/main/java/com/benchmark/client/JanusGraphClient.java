@@ -111,3 +111,4 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         if (cluster != null) cluster.close();
     }
 }
+
