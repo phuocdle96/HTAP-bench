@@ -3,6 +3,7 @@ package com.benchmark.arrival;
 import com.benchmark.client.ClientWorker;
 import com.benchmark.client.DatabaseClient;
 import com.benchmark.generator.QueryTemplate;
+import com.benchmark.metrics.Counters;
 import com.benchmark.metrics.QueryResult;
 
 import java.util.List;
@@ -12,7 +13,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Generates Poisson arrivals (open-loop).  After each exponential gap it
+ * Generates Poisson arrivals (open-loop). After each exponential gap it
  * submits ONE single-shot ClientWorker to a shared virtual-thread pool.
  *
  * time handling:
@@ -31,6 +32,7 @@ public final class ArrivalSubmitter implements Runnable {
     private final long endNanos;        // same moment, in nanoTime domain
 
     private final List<QueryResult> collector;
+    private final Counters counters;    // NEW: counts submissions/completions/failures
 
     public ArrivalSubmitter(double lambda,
                             ExecutorService workerPool,
@@ -38,7 +40,8 @@ public final class ArrivalSubmitter implements Runnable {
                             BlockingQueue<QueryTemplate.PreparedQuery> qPool,
                             String category,
                             long endMillisWall,                     // epoch-ms
-                            List<QueryResult> collector) {
+                            List<QueryResult> collector,
+                            Counters counters) {                    // ← NEW
 
         this.lambda       = lambda;
         this.workerPool   = workerPool;
@@ -51,6 +54,7 @@ public final class ArrivalSubmitter implements Runnable {
                              (endMillisWall - System.currentTimeMillis()) * 1_000_000L;
 
         this.collector    = collector;
+        this.counters     = counters;
 
         System.out.printf("Submitter %s will run for %.2f s%n",
                           category, (endNanos - System.nanoTime()) / 1e9);
@@ -63,6 +67,7 @@ public final class ArrivalSubmitter implements Runnable {
         while (System.nanoTime() < endNanos) {
 
             /* single-shot worker */
+            counters.submitted.increment(); // ← count offered request
             workerPool.submit(new ClientWorker(
                     db,
                     qPool,
@@ -70,7 +75,8 @@ public final class ArrivalSubmitter implements Runnable {
                     endMillisWall,          // correct clock for worker loop
                     /* warm */ false,
                     /* singleShot */ true,
-                    collector));
+                    collector,
+                    counters));             // ← pass counters into worker
 
             /* exponential gap: gap = −ln(U) / λ   (seconds) */
             double gapSec  = -Math.log1p(-rnd.nextDouble()) / lambda;

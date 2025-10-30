@@ -1,5 +1,6 @@
 com/benchmark/client/JanusGraphClient.class
 com/benchmark/util/ResultsLogger.class
+com/benchmark/metrics/Counters.class
 com/benchmark/generator/QueryGenerator$1.class
 com/benchmark/client/DatabaseClient.class
 com/benchmark/client/Neo4jClient.class
@@ -16,3 +17,4 @@ com/benchmark/arrival/ArrivalMode.class
 com/benchmark/generator/QueryGenerator$Template.class
 com/benchmark/generator/QueryGenerator.class
 com/benchmark/BenchmarkRunner.class
+com/benchmark/BenchmarkRunner$IntervalData.class

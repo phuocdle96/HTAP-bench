@@ -35,7 +35,7 @@ public class MemgraphClient implements DatabaseClient, AutoCloseable {
                         "WHERE n.`" + idProperty + "` IS NOT NULL " +
                         "RETURN n.`" + idProperty + "` AS id LIMIT $cap";
         try (Session s = driver.session()) {
-            return s.run(cypher, Map.of("cap", 1_000))
+            return s.run(cypher, Map.of("cap", 100_000))
                     .list(r -> r.get("id").isNull() ? null : r.get("id").asString())
                     .stream().filter(Objects::nonNull).toList();
         }

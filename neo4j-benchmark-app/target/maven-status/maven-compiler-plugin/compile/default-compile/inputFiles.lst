@@ -1,5 +1,6 @@
 /home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/BenchmarkRunner.java
 /home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/client/MemgraphClient.java
+/home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/metrics/Counters.java
 /home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/metrics/MetricsAggregator.java
 /home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/arrival/ArrivalMode.java
 /home/ubuntu/SJSU_Project/HTAP-bench/neo4j-benchmark-app/src/main/java/com/benchmark/client/ClientWorker.java
