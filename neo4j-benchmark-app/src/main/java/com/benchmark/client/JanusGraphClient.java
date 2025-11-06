@@ -10,13 +10,22 @@ import org.apache.tinkerpop.gremlin.driver.ResultSet;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
+/**
+ * JanusGraph Gremlin client.
+ *
+ * Supports multiple Gremlin Server contact points for load balancing:
+ *   --janus-hosts=g1,g2,g3  (port is shared via --uri like gremlin://host:8182)
+ *
+ * Read-only flag is ignored (Gremlin Server doesn't distinguish per session);
+ * load-balancing is handled by the Gremlin driver across contact points.
+ */
 public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
-    private final String host;
+    private final List<String> hosts;
     private final int port;
 
-    // ✅ ADDED: Tuning parameters
     private final int minPoolSize;
     private final int maxPoolSize;
     private final int maxWaitMs;
@@ -25,16 +34,23 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
     private Cluster cluster;
     private Client client;
 
-    /** Basic constructor with defaults (matches original). */
+    /** Basic constructor with single host (back-compat). */
     public JanusGraphClient(String host, int port) {
-        this(host, port, 8, 32, 30000, 120); // Sensible defaults
+        this(List.of(host), port, 8, 32, 30000, 120);
     }
 
-    /**
-     * ✅ ADDED: Fully parameterized constructor for tuning.
-     */
+    /** Fully parameterized constructor (single host). */
     public JanusGraphClient(String host, int port, int minPoolSize, int maxPoolSize, int maxWaitMs, int queryTimeoutSeconds) {
-        this.host = host;
+        this(List.of(host), port, minPoolSize, maxPoolSize, maxWaitMs, queryTimeoutSeconds);
+    }
+
+    /** NEW: Multi-host constructor for load balancing. */
+    public JanusGraphClient(List<String> hosts, int port, int minPoolSize, int maxPoolSize, int maxWaitMs, int queryTimeoutSeconds) {
+        this.hosts = (hosts == null || hosts.isEmpty())
+                ? List.of("localhost")
+                : hosts.stream().filter(s -> s != null && !s.isBlank())
+                        .map(JanusGraphClient::stripPort)
+                        .distinct().collect(Collectors.toList());
         this.port = port;
         this.minPoolSize = minPoolSize;
         this.maxPoolSize = maxPoolSize;
@@ -42,17 +58,23 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
+    private static String stripPort(String h) {
+        int idx = h.indexOf(':');
+        return (idx > 0) ? h.substring(0, idx) : h;
+    }
+
     @Override
     public void connect() {
-        // ✅ CHANGED: Apply all tuning parameters
-        this.cluster = Cluster.build()
-                .addContactPoint(host)
+        Cluster.Builder b = Cluster.build()
                 .port(port)
                 .minConnectionPoolSize(this.minPoolSize)
                 .maxConnectionPoolSize(this.maxPoolSize)
                 .maxWaitForConnection(this.maxWaitMs)
-                .maxContentLength(10 * 1024 * 1024) // 10MB default
-                .create();
+                .maxContentLength(10 * 1024 * 1024); // 10MB
+
+        for (String h : hosts) b.addContactPoint(h);
+
+        this.cluster = b.create();
         this.client = cluster.connect();
     }
 
@@ -60,13 +82,10 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
     @Override
     public List<Map<String, Object>> executeQuery(String script, Map<String, Object> params) {
         try {
-            // 🛑 REMOVED: `normalizeGremlin` call moved to QueryGenerator
             ResultSet rs = (params == null || params.isEmpty())
-                    ? client.submit(script)               // no bindings
-                    : client.submit(script, params);      // with bindings
+                    ? client.submit(script)
+                    : client.submit(script, params);
 
-            // Wait for all results (client-side)
-            // ✅ CHANGED: Use configurable timeout
             List<Result> all = rs.all().get(this.queryTimeoutSeconds, TimeUnit.SECONDS);
 
             List<Map<String, Object>> out = new ArrayList<>(all.size());
@@ -90,7 +109,6 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
     @Override
     public List<Map<String, Object>> executePrepared(QueryTemplate.PreparedQuery pq) {
         if (pq.lang == QueryLanguage.GREMLIN) {
-            // `pq.text` is now pre-normalized by QueryGenerator
             return executeQuery(pq.text, pq.params);
         }
         throw new UnsupportedOperationException("JanusGraph client only supports GREMLIN here");
@@ -98,19 +116,19 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public List<String> fetchSampleIds(String label, String idProperty) {
-        // ✅ FIXED SCRIPT (Uses Index)
-        String script = "g.V().has(idProp).hasLabel(label).limit(cap).values(idProp)";
+        // Prefer label + existence predicate; ensure exists index or keep cap small.
+        String script = "g.V().hasLabel(label).has(idProp, neq(null)).limit(cap).values(idProp)";
 
         Map<String, Object> bindings = Map.of(
                 "label", label,
                 "idProp", idProperty,
-                "cap", 1_000
+                "cap", 10_000
         );
 
         List<Map<String, Object>> rows = executeQuery(script, bindings);
         List<String> out = new ArrayList<>(rows.size());
         for (Map<String, Object> m : rows) {
-            Object v = m.get("value"); // This logic is correct!
+            Object v = m.get("value");
             if (v instanceof Optional<?> opt) v = opt.orElse(null);
             if (v != null) {
                 String s = String.valueOf(v);

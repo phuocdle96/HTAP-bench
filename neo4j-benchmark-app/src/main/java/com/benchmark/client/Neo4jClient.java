@@ -4,7 +4,6 @@ import org.neo4j.driver.*;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -41,7 +40,14 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public List<Map<String,Object>> executeQuery(String cypher, Map<String,Object> params) {
-        try (Session s = driver.session(SessionConfig.forDatabase(database))) {
+        return executeQuery(cypher, params, false);
+    }
+
+    @Override
+    public List<Map<String, Object>> executeQuery(String cypher, Map<String, Object> params, boolean readOnly) {
+        SessionConfig.Builder b = SessionConfig.builder().withDatabase(database)
+                .withDefaultAccessMode(readOnly ? AccessMode.READ : AccessMode.WRITE);
+        try (Session s = driver.session(b.build())) {
             return (params == null || params.isEmpty())
                     ? s.run(cypher).list(org.neo4j.driver.Record::asMap)
                     : s.run(cypher, params).list(org.neo4j.driver.Record::asMap);
@@ -60,7 +66,7 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
         try (Session s = driver.session(SessionConfig.forDatabase(database))) {
             return s.run(cypher, Map.of("cap", 10_000))
                     .list(r -> r.get("id").isNull() ? null : r.get("id").asString())
-                    .stream().filter(Objects::nonNull).toList();
+                    .stream().filter(java.util.Objects::nonNull).toList();
         }
     }
 

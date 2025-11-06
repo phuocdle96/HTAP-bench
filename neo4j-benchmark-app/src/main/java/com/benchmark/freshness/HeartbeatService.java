@@ -8,6 +8,7 @@ import java.time.YearMonth;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -45,9 +46,10 @@ public final class HeartbeatService implements AutoCloseable {
     private final DatabaseClient db;
     private final Config cfg;
 
+    // Use platform threads for a scheduled pool (virtual threads are not ideal here)
     private final ScheduledExecutorService sched =
             Executors.newScheduledThreadPool(2, r -> {
-                Thread t = Thread.ofVirtual().name("hb-"+UUID.randomUUID()).factory().newThread(r);
+                Thread t = new Thread(r, "hb-sched-" + UUID.randomUUID());
                 t.setDaemon(true);
                 return t;
             });
@@ -65,6 +67,10 @@ public final class HeartbeatService implements AutoCloseable {
     private volatile long lastSampleWall = -1L;
     private final List<Long> writeDeltas = Collections.synchronizedList(new ArrayList<>());
     private final List<Long> readDeltas  = Collections.synchronizedList(new ArrayList<>());
+
+    // Per-run unique ID parts
+    private final String hbRunPrefix; // e.g. 20251106T083512123Z
+    private final String hbRunRand;   // short base36 token
 
     public HeartbeatService(DatabaseClient db, Config cfg) {
         this.db = db;
@@ -84,6 +90,10 @@ public final class HeartbeatService implements AutoCloseable {
             }
             default -> throw new IllegalArgumentException("Unknown engine: " + cfg.engine);
         }
+
+        long runStartMs = System.currentTimeMillis();
+        hbRunPrefix = "%tY%<tm%<tdT%<tH%<tM%<tS%<tLZ".formatted(runStartMs); // 20251106T083512123Z
+        hbRunRand   = Long.toString(ThreadLocalRandom.current().nextLong(1_000_000_000L), 36).toUpperCase();
     }
 
     /** Start writer and sampler if enabled. */
@@ -105,7 +115,6 @@ public final class HeartbeatService implements AutoCloseable {
         sched.shutdown();
         try { sched.awaitTermination(10, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
 
-        // Console percentiles
         var arr = samples.stream().mapToLong(FreshnessSample::freshnessMs).sorted().toArray();
         if (arr.length == 0) {
             System.out.println("[HB] No freshness samples collected.");
@@ -129,7 +138,7 @@ public final class HeartbeatService implements AutoCloseable {
         if (!readDeltas.isEmpty()) {
             long[] r = readDeltas.stream().mapToLong(Long::longValue).sorted().toArray();
             System.out.printf("[HB] read  Δms p50=%d p95=%d p99=%d (n=%d)%n",
-                    pct(r,50), pct(r,95), pct(r,99), r.length);
+                    pct(r,50), pct(r,99), pct(r,99), r.length);
         }
     }
 
@@ -171,6 +180,9 @@ public final class HeartbeatService implements AutoCloseable {
         long idSeq = seq.incrementAndGet();
         long ts = now;
 
+        // time-based, run-unique ID to avoid cross-run collisions
+        String hbId = "hb_" + hbRunPrefix + "_" + now + "_" + hbRunRand + "_" + idSeq;
+
         // choose a day inside HB month → falls within pre-bound window
         LocalDate day = LocalDate.of(cfg.hbMonth.getYear(), cfg.hbMonth.getMonthValue(), 1 + (int)(idSeq % 28));
 
@@ -179,12 +191,7 @@ public final class HeartbeatService implements AutoCloseable {
                 String cypher =
                         "CREATE (e:Event:Heartbeat {" +
                                 " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
-                Map<String,Object> p = Map.of(
-                        "id",  "hb_" + idSeq,
-                        "date", day,
-                        "ts",  ts,
-                        "seq", idSeq
-                );
+                Map<String,Object> p = Map.of("id", hbId, "date", day, "ts", ts, "seq", idSeq);
                 db.executeQuery(cypher, p);
             }
 
@@ -192,12 +199,7 @@ public final class HeartbeatService implements AutoCloseable {
                 String cypher =
                         "CREATE (e:Event:Heartbeat {" +
                                 " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
-                Map<String,Object> p = Map.of(
-                        "id",  "hb_" + idSeq,
-                        "date", yyyymmddString(day),
-                        "ts",  ts,
-                        "seq", idSeq
-                );
+                Map<String,Object> p = Map.of("id", hbId, "date", yyyymmddString(day), "ts", ts, "seq", idSeq);
                 db.executeQuery(cypher, p);
             }
 
@@ -211,7 +213,7 @@ public final class HeartbeatService implements AutoCloseable {
                         ".property('seq', seq)" +
                         ".iterate()";
                 Map<String,Object> b = new HashMap<>();
-                b.put("id", "hb_" + idSeq);
+                b.put("id", hbId);
                 b.put("evDate", toYYYYMMDDLong(day));
                 b.put("ts", ts);
                 b.put("seq", idSeq);
@@ -223,11 +225,11 @@ public final class HeartbeatService implements AutoCloseable {
     private Long readLatestWriteTimestamp() {
         switch (cfg.engine) {
             case NEO4J -> {
+                // Use aggregation to avoid seq/ordering pitfalls
                 String cypher =
                         "MATCH (e:Event:Heartbeat) " +
                         "WHERE e.date >= $start AND e.date < $end " +
-                        "RETURN e.ts_write_ms AS ts, e.seq AS seq " +
-                        "ORDER BY e.seq DESC LIMIT 1";
+                        "RETURN max(e.ts_write_ms) AS ts";
                 Map<String,Object> p = Map.of("start", startDateParam, "end", endDateParam);
                 List<Map<String,Object>> rows = db.executeQuery(cypher, p);
                 if (!rows.isEmpty()) {
@@ -240,8 +242,7 @@ public final class HeartbeatService implements AutoCloseable {
                 String cypher =
                         "MATCH (e:Event:Heartbeat) " +
                         "WHERE e.date >= $start AND e.date < $end " +
-                        "RETURN e.ts_write_ms AS ts, e.seq AS seq " +
-                        "ORDER BY e.seq DESC LIMIT 1";
+                        "RETURN max(e.ts_write_ms) AS ts";
                 Map<String,Object> p = Map.of(
                         "start", yyyymmddString((LocalDate) startDateParam),
                         "end",   yyyymmddString((LocalDate) endDateParam)
@@ -254,24 +255,18 @@ public final class HeartbeatService implements AutoCloseable {
                 return null;
             }
             case JANUSGRAPH -> {
+                // values('ts_write_ms').max() returns a scalar; our client wraps it as {value: ...}
                 String g =
                         "g.V().hasLabel('Event')" +
                         ".has('eventType','Heartbeat')" +
                         ".has('eventDate', gte(startDate))" +
                         ".has('eventDate', lt(endDate))" +
-                        ".order().by('seq', desc)" +
-                        ".limit(1)" +
-                        ".project('ts','seq')" +
-                        ".by(values('ts_write_ms'))" +
-                        ".by(values('seq'))";
-                Map<String,Object> b = Map.of(
-                        "startDate", startDateParam,
-                        "endDate",   endDateParam
-                );
+                        ".values('ts_write_ms').max()";
+                Map<String,Object> b = Map.of("startDate", startDateParam, "endDate", endDateParam);
                 List<Map<String,Object>> rows = db.executeQuery(g, b);
                 if (!rows.isEmpty()) {
-                    Object ts = rows.get(0).get("ts");
-                    return (ts instanceof Number n) ? n.longValue() : null;
+                    Object v = rows.get(0).getOrDefault("value", null);
+                    return (v instanceof Number n) ? n.longValue() : null;
                 }
                 return null;
             }

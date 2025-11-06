@@ -39,6 +39,9 @@ public class ClientWorker implements Runnable {
 
     @Override
     public void run() {
+        final boolean readOnlyCategory =
+                "OLAP".equalsIgnoreCase(category) || "GRAPH".equalsIgnoreCase(category);
+
         try {
             do {
                 final QueryTemplate.PreparedQuery template = qPool.take();
@@ -59,7 +62,7 @@ public class ClientWorker implements Runnable {
 
                     long t0 = System.nanoTime();
                     try {
-                        db.executePrepared(exec);
+                        db.executePreparedWithMode(exec, readOnlyCategory);
                         long dt = System.nanoTime() - t0;
                         if (!warmup) results.add(new QueryResult(category, dt));
                         break; // success
@@ -72,7 +75,11 @@ public class ClientWorker implements Runnable {
                                 || msg.contains("ConstraintValidationFailed");
 
                         boolean isTransientError =
-                                "org.neo4j.driver.exceptions.TransientException".equals(t.getClass().getName());
+                                t instanceof org.neo4j.driver.exceptions.TransientException
+                                || (t.getCause() instanceof org.neo4j.driver.exceptions.TransientException)
+                                || msg.contains("TransientError")
+                                || msg.contains("DeadlockDetected")
+                                || msg.contains("ServiceUnavailable");
 
                         if ((duplicateId || isTransientError) && attempts < 4) {
                             try {
