@@ -32,15 +32,14 @@ public class BenchmarkRunner implements Callable<Integer> {
     @Option(names = "--password", defaultValue = "neo4j")                 String password;
     @Option(names = "--database", defaultValue = "neo4j")                 String database;
 
-    /* ---------------- Memgraph read replicas (optional) ---------------- */
-    @Option(names = "--memgraph-read-uris", split = ",",
-            description = "Comma-separated Bolt URIs for Memgraph read replicas, e.g., bolt://r1:7687,bolt://r2:7687")
+    /* -------- Read-replica options (exposed) -------- */
+    @Option(names="--memgraph-read-uris", split=",",
+            description = "Comma-separated Bolt URIs for Memgraph read replicas (e.g. bolt://r1:7687,bolt://r2:7687)")
     List<String> memgraphReadUris = new ArrayList<>();
 
-    /* ---------------- JanusGraph multi-hosts (optional) ---------------- */
-    @Option(names="--janus-hosts", split = ",",
-            description = "Comma-separated Gremlin Server hosts for JanusGraph, e.g., g1,g2,g3. Port comes from --uri.")
-    List<String> janusHosts = new ArrayList<>();
+    @Option(names="--janus-read-hosts", split=",",
+            description = "Comma-separated Gremlin hosts for JanusGraph read-only queries (host[:port], default port 8182)")
+    List<String> janusReadHosts = new ArrayList<>();
 
     /* ---------------- worker counts (CLOSED) ---------------- */
     @Option(names = "--oltp-clients",  defaultValue = "8") int oltpClients;
@@ -152,7 +151,7 @@ public class BenchmarkRunner implements Callable<Integer> {
                 db,
                 new HeartbeatService.Config(hbEnabled, hbWriteMs, hbReadMs, hbMonth, engine)
         );
-        hb.start(); // starts tiny background writer + sampler (excluded from throughput)
+        hb.start();
 
         /* ---------- workers ---------- */
         ThreadPoolExecutor workers = new ThreadPoolExecutor(
@@ -187,10 +186,10 @@ public class BenchmarkRunner implements Callable<Integer> {
         /* ---------- shutdown ---------- */
         workers.shutdown();
         workers.awaitTermination(5, TimeUnit.MINUTES);
-        hb.stopAndReport();  // print + write hb CSV
+        hb.stopAndReport();
         db.close();
 
-        // Final full-run report
+        // Final report
         try {
             boolean openMode = (arrivalMode == ArrivalMode.OPEN);
             Map<String, Double> rates = openMode ? ratesOf(λ.getOrDefault("OLTP",0.0),
@@ -222,26 +221,15 @@ public class BenchmarkRunner implements Callable<Integer> {
             case "MEMGRAPH":
                 return new MemgraphClient(cli.uri, cli.user, cli.password, cli.memgraphReadUris);
             case "JANUSGRAPH": {
-                // Parse uri for host:port (e.g., gremlin://host:8182 or ws://host:8182)
-                String u = cli.uri.replace("gremlin://", "")
-                                  .replace("ws://", "")
-                                  .replace("wss://", "");
-                String host = u;
-                int port = 8182;
+                String host; int port;
+                String u = cli.uri.replace("gremlin://", "").replace("ws://", "").replace("wss://", "");
                 if (u.contains(":")) {
                     String[] hp = u.split(":", 2);
-                    host = hp[0];
-                    try { port = Integer.parseInt(hp[1]); } catch (NumberFormatException ignore) { port = 8182; }
-                }
-
-                List<String> hosts = (cli.janusHosts == null || cli.janusHosts.isEmpty())
-                        ? List.of(host)
-                        : cli.janusHosts;
-
-                return new JanusGraphClient(
-                        hosts, port,
-                        cli.janusMinPool, cli.janusMaxPool, cli.janusWaitMs, cli.janusTimeoutSec
-                );
+                    host = hp[0]; port = Integer.parseInt(hp[1]);
+                } else { host = u; port = 8182; }
+                return new JanusGraphClient(host, port,
+                        cli.janusReadHosts,
+                        cli.janusMinPool, cli.janusMaxPool, cli.janusWaitMs, cli.janusTimeoutSec);
             }
             default:
                 throw new IllegalArgumentException("Unknown --engine: " + cli.engineName);

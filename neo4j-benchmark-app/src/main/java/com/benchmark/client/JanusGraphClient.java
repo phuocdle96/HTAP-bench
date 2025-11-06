@@ -1,4 +1,3 @@
-// src/main/java/com/benchmark/client/JanusGraphClient.java
 package com.benchmark.client;
 
 import com.benchmark.generator.QueryLanguage;
@@ -13,74 +12,136 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * JanusGraph Gremlin client.
+ * JanusGraph/Gremlin client with optional read-hosts for OLAP/GRAPH load balancing.
  *
- * Supports multiple Gremlin Server contact points for load balancing:
- *   --janus-hosts=g1,g2,g3  (port is shared via --uri like gremlin://host:8182)
- *
- * Read-only flag is ignored (Gremlin Server doesn't distinguish per session);
- * load-balancing is handled by the Gremlin driver across contact points.
+ * Usage (via BenchmarkRunner):
+ *   --uri gremlin://writer-host:8182
+ *   --janus-read-hosts reader1:8182,reader2:8182
  */
 public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
-    private final List<String> hosts;
-    private final int port;
+    private final String writeHost;
+    private final int writePort;
 
+    private final List<String> readHosts; // host[:port]; default 8182
     private final int minPoolSize;
     private final int maxPoolSize;
     private final int maxWaitMs;
     private final int queryTimeoutSeconds;
 
-    private Cluster cluster;
-    private Client client;
+    private Cluster writeCluster;
+    private Client  writeClient;
 
-    /** Basic constructor with single host (back-compat). */
+    private Cluster readCluster;   // optional
+    private Client  readClient;    // optional
+
+    /** Basic constructor with defaults (single host). */
     public JanusGraphClient(String host, int port) {
-        this(List.of(host), port, 8, 32, 30000, 120);
+        this(host, port, List.of(), 8, 32, 30000, 120);
     }
 
-    /** Fully parameterized constructor (single host). */
-    public JanusGraphClient(String host, int port, int minPoolSize, int maxPoolSize, int maxWaitMs, int queryTimeoutSeconds) {
-        this(List.of(host), port, minPoolSize, maxPoolSize, maxWaitMs, queryTimeoutSeconds);
-    }
-
-    /** NEW: Multi-host constructor for load balancing. */
-    public JanusGraphClient(List<String> hosts, int port, int minPoolSize, int maxPoolSize, int maxWaitMs, int queryTimeoutSeconds) {
-        this.hosts = (hosts == null || hosts.isEmpty())
-                ? List.of("localhost")
-                : hosts.stream().filter(s -> s != null && !s.isBlank())
-                        .map(JanusGraphClient::stripPort)
-                        .distinct().collect(Collectors.toList());
-        this.port = port;
+    public JanusGraphClient(String host,
+                            int port,
+                            List<String> readHosts,
+                            int minPoolSize,
+                            int maxPoolSize,
+                            int maxWaitMs,
+                            int queryTimeoutSeconds) {
+        this.writeHost = host;
+        this.writePort = port;
+        this.readHosts = (readHosts == null) ? List.of() : readHosts;
         this.minPoolSize = minPoolSize;
         this.maxPoolSize = maxPoolSize;
         this.maxWaitMs = maxWaitMs;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
-    private static String stripPort(String h) {
-        int idx = h.indexOf(':');
-        return (idx > 0) ? h.substring(0, idx) : h;
-    }
-
     @Override
     public void connect() {
-        Cluster.Builder b = Cluster.build()
-                .port(port)
+        // build writer cluster
+        Cluster.Builder wb = Cluster.build()
+                .addContactPoint(writeHost)
+                .port(writePort)
                 .minConnectionPoolSize(this.minPoolSize)
                 .maxConnectionPoolSize(this.maxPoolSize)
                 .maxWaitForConnection(this.maxWaitMs)
-                .maxContentLength(10 * 1024 * 1024); // 10MB
+                .maxContentLength(10 * 1024 * 1024);
+        this.writeCluster = wb.create();
+        this.writeClient  = writeCluster.connect();
 
-        for (String h : hosts) b.addContactPoint(h);
+        // build read cluster if provided; else reuse writer
+        if (!readHosts.isEmpty()) {
+            Cluster.Builder rb = Cluster.build()
+                    .minConnectionPoolSize(this.minPoolSize)
+                    .maxConnectionPoolSize(this.maxPoolSize)
+                    .maxWaitForConnection(this.maxWaitMs)
+                    .maxContentLength(10 * 1024 * 1024);
 
-        this.cluster = b.create();
-        this.client = cluster.connect();
+            for (String raw : readHosts) {
+                String h = raw.trim();
+                if (h.isEmpty()) continue;
+                String host = h;
+                int port = 8182;
+                int idx = h.lastIndexOf(':');
+                if (idx > 0 && idx < h.length() - 1) {
+                    host = h.substring(0, idx);
+                    try { port = Integer.parseInt(h.substring(idx + 1)); } catch (NumberFormatException ignore) {}
+                }
+                rb.addContactPoint(host).port(port);
+            }
+            this.readCluster = rb.create();
+            this.readClient  = readCluster.connect();
+        } else {
+            this.readCluster = this.writeCluster;
+            this.readClient  = this.writeClient;
+        }
     }
 
-    /** Generic GREMLIN submit (used by executePrepared and fetchSampleIds). */
+    /** Generic GREMLIN submit (writer by default). */
     @Override
     public List<Map<String, Object>> executeQuery(String script, Map<String, Object> params) {
+        return submit(writeClient, script, params);
+    }
+
+    /** Route GREMLIN prepared queries to read or write client based on readOnly hint. */
+    @Override
+    public List<Map<String, Object>> executePreparedWithMode(QueryTemplate.PreparedQuery pq, boolean readOnly) {
+        if (pq.lang != QueryLanguage.GREMLIN) {
+            return DatabaseClient.super.executePreparedWithMode(pq, readOnly);
+        }
+        Client c = (readOnly ? readClient : writeClient);
+        return submit(c, pq.text, pq.params);
+    }
+
+    /** Standard GREMLIN prepared execution (writer). */
+    @Override
+    public List<Map<String, Object>> executePrepared(QueryTemplate.PreparedQuery pq) {
+        if (pq.lang == QueryLanguage.GREMLIN) {
+            return submit(writeClient, pq.text, pq.params);
+        }
+        throw new UnsupportedOperationException("JanusGraph client only supports GREMLIN here");
+    }
+
+    @Override
+    public List<String> fetchSampleIds(String label, String idProperty) {
+        // Prefer using writer; sampling is light and avoids extra client pick logic.
+        String script = "g.V().has(idProp).hasLabel(label).limit(cap).values(idProp)";
+        Map<String, Object> bindings = Map.of("label", label, "idProp", idProperty, "cap", 1_000);
+
+        List<Map<String, Object>> rows = submit(writeClient, script, bindings);
+        List<String> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> m : rows) {
+            Object v = m.get("value");
+            if (v instanceof Optional<?> opt) v = opt.orElse(null);
+            if (v != null) {
+                String s = String.valueOf(v);
+                if (!s.isBlank()) out.add(s);
+            }
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> submit(Client client, String script, Map<String, Object> params) {
         try {
             ResultSet rs = (params == null || params.isEmpty())
                     ? client.submit(script)
@@ -105,42 +166,11 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         }
     }
 
-    /** JanusGraph executes GREMLIN prepared queries. */
-    @Override
-    public List<Map<String, Object>> executePrepared(QueryTemplate.PreparedQuery pq) {
-        if (pq.lang == QueryLanguage.GREMLIN) {
-            return executeQuery(pq.text, pq.params);
-        }
-        throw new UnsupportedOperationException("JanusGraph client only supports GREMLIN here");
-    }
-
-    @Override
-    public List<String> fetchSampleIds(String label, String idProperty) {
-        // Prefer label + existence predicate; ensure exists index or keep cap small.
-        String script = "g.V().hasLabel(label).has(idProp, neq(null)).limit(cap).values(idProp)";
-
-        Map<String, Object> bindings = Map.of(
-                "label", label,
-                "idProp", idProperty,
-                "cap", 10_000
-        );
-
-        List<Map<String, Object>> rows = executeQuery(script, bindings);
-        List<String> out = new ArrayList<>(rows.size());
-        for (Map<String, Object> m : rows) {
-            Object v = m.get("value");
-            if (v instanceof Optional<?> opt) v = opt.orElse(null);
-            if (v != null) {
-                String s = String.valueOf(v);
-                if (!s.isBlank()) out.add(s);
-            }
-        }
-        return out;
-    }
-
     @Override
     public void close() {
-        if (client != null) client.close();
-        if (cluster != null) cluster.close();
+        if (writeClient != null) writeClient.close();
+        if (readClient  != null && readClient != writeClient) readClient.close();
+        if (writeCluster != null) writeCluster.close();
+        if (readCluster  != null && readCluster != writeCluster) readCluster.close();
     }
 }

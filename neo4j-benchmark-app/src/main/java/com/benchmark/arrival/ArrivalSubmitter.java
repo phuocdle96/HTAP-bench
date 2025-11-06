@@ -39,12 +39,11 @@ public final class ArrivalSubmitter implements Runnable {
         this.qPool = qPool;
         this.category = category;
         this.endMillisWall = endMillisWall;
-        this.endNanos = System.nanoTime() +
-                (endMillisWall - System.currentTimeMillis()) * 1_000_000L;
+        this.endNanos = System.nanoTime()
+                + (endMillisWall - System.currentTimeMillis()) * 1_000_000L;
         this.collector = collector;
 
-        System.out.printf("Submitter %s will run for %.2f s%n",
-                category, (endNanos - System.nanoTime()) / 1e9);
+        // NOTE: removed noisy per-shard "will run for ..." logs
     }
 
     @Override
