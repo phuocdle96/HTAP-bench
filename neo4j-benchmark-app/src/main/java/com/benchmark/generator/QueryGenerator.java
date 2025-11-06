@@ -1,4 +1,3 @@
-// src/main/java/com/benchmark/generator/QueryGenerator.java
 package com.benchmark.generator;
 
 import com.benchmark.client.DatabaseClient;
@@ -6,7 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.InputStream;
-import java.time.LocalDate;
+import java.time.*;
 import java.time.YearMonth;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
@@ -15,32 +14,16 @@ import static com.benchmark.generator.QueryLanguage.CYPHER;
 import static com.benchmark.generator.QueryLanguage.GREMLIN;
 
 /**
- * QueryGenerator that loads templates from classpath resource: src/main/resources/queries.json
- * and binds parameters using sampled IDs from the database (with synthetic fallbacks).
+ * Loads /queries.json and produces PreparedQuery objects with engine-specific parameter binding.
  *
  * Engine selection:
- *  - NEO4J / MEMGRAPH -> uses Template.cypher and binds java.time.LocalDate for date params
- *  - JANUSGRAPH       -> uses Template.gremlin and binds YYYYMMDD as long for date params
+ *  - NEO4J / MEMGRAPH -> Template.cypher; LocalDate for date params; LocalDateTime for heartbeat
+ *  - JANUSGRAPH       -> Template.gremlin; long YYYYMMDD for dates; long epochMillis for heartbeat
  *
  * Dataset date range assumption: 2000–2012 inclusive.
- * We generate a random month window inside this range and provide:
- *   - startDate: first day of the month (inclusive)
- *   - endDate:   first day of next month (exclusive)
- *
- * Param binding summary:
- *  - patientId/unitId/diagnosisCode: sampled from DB (fallback to synthetic)
- *  - admissionId: random UUID
- *  - admissionDate:
- *        Neo4j/Memgraph -> LocalDate
- *        JanusGraph     -> long YYYYMMDD (e.g., 20090101L)
- *  - startDate/endDate:
- *        Neo4j/Memgraph -> LocalDate
- *        JanusGraph     -> long YYYYMMDD
- *  - windowDays (for readmission analysis): random between 7 and 30 (inclusive)
  */
 public class QueryGenerator {
 
-    /** Pick which query dialects/templates to emit. */
     public enum Engine { NEO4J, MEMGRAPH, JANUSGRAPH }
 
     private static final int MIN_YEAR = 2000;
@@ -73,12 +56,9 @@ public class QueryGenerator {
         for (Template t : templates) {
             String cat = (t.category == null) ? "OLTP" : t.category.toUpperCase(Locale.ROOT);
             String text = chooseTextForEngine(t);
-            if (text == null || text.isBlank()) {
-                // No query for this engine in this template; skip it
-                continue;
-            }
+            if (text == null || text.isBlank()) continue;
 
-            // Normalize Gremlin once per template for JanusGraph/TinkerPop 3.7 wording.
+            // Normalize Gremlin once per template for TP 3.7 wording.
             if (engine == Engine.JANUSGRAPH) {
                 text = normalizeGremlin(text);
             }
@@ -93,7 +73,7 @@ public class QueryGenerator {
             for (int i = 0; i < copies; i++) {
                 Map<String,Object> params = bindParams(t.params, rnd);
                 QueryLanguage lang = (engine == Engine.JANUSGRAPH) ? GREMLIN : CYPHER;
-                out.get(cat).add(new QueryTemplate.PreparedQuery(lang, text, params));
+                out.get(cat).add(new QueryTemplate.PreparedQuery(lang, text, params, t.name, cat));
             }
         }
         return out;
@@ -128,12 +108,12 @@ public class QueryGenerator {
 
         Map<String,Object> p = new HashMap<>();
 
-        // Precompute a month window once per query execution (if any date params are present).
+        // Precompute month window
         final YearMonth ym = randomYearMonth(rnd);
         final LocalDate startLD = LocalDate.of(ym.getYear(), ym.getMonth(), 1);
         final LocalDate endLD   = startLD.plusMonths(1);
 
-        // Engine-specific representations for range params
+        // Engine-specific range representations
         final Object startForEngine = switch (engine) {
             case JANUSGRAPH -> toYYYYMMDDLong(startLD);
             case NEO4J, MEMGRAPH -> startLD;
@@ -152,32 +132,31 @@ public class QueryGenerator {
                 case "admissionId"   -> p.put("admissionId", UUID.randomUUID().toString());
 
                 case "admissionDate" -> {
-                    // If an OLTP insert needs a date property:
-                    // - Neo4j/Memgraph -> LocalDate
-                    // - JanusGraph     -> long YYYYMMDD
                     LocalDate day = randomDayInMonth(ym, rnd);
-                    if (engine == Engine.JANUSGRAPH) {
-                        p.put("admissionDate", toYYYYMMDDLong(day));
-                    } else {
-                        p.put("admissionDate", day);
-                    }
+                    if (engine == Engine.JANUSGRAPH) p.put("admissionDate", toYYYYMMDDLong(day));
+                    else                              p.put("admissionDate", day);
                 }
 
-                // Range params used by OLAP templates (month window)
+                // Range params
                 case "startDate" -> p.put("startDate", startForEngine);
                 case "endDate"   -> p.put("endDate",   endForEngine);
 
                 // Readmission window (GRAPH workload)
                 case "windowDays" -> p.put("windowDays", rnd.nextInt(7, 31));
 
-                // Backward compatibility if any legacy template still uses 'year'
+                // Heartbeat
+                case "hbNow" -> {
+                    if (engine == Engine.JANUSGRAPH) {
+                        p.put("hbNow", System.currentTimeMillis());              // epoch millis (long)
+                    } else {
+                        p.put("hbNow", java.time.LocalDateTime.now());           // Neo4j/Memgraph
+                    }
+                }
+
+                // Legacy
                 case "year"      -> p.put("year", String.valueOf(rnd.nextInt(MIN_YEAR, MAX_YEAR + 1)));
 
-                default -> {
-                    // Fallback: generate a neutral placeholder that won't coerce to wrong numeric type.
-                    // (All current templates bind known names, so this path shouldn't be used.)
-                    p.put(n, "X" + rnd.nextInt(1_000_000));
-                }
+                default -> p.put(n, "X" + rnd.nextInt(1_000_000));
             }
         }
         return p;
@@ -209,9 +188,7 @@ public class QueryGenerator {
     /** Read /queries.json from classpath (src/main/resources/queries.json) */
     private List<Template> readTemplatesFromClasspath() {
         try (InputStream in = getResourceStream("queries.json")) {
-            if (in == null) {
-                throw new RuntimeException("queries.json not found on classpath (src/main/resources/queries.json)");
-            }
+            if (in == null) throw new RuntimeException("queries.json not found on classpath (src/main/resources/queries.json)");
             ObjectMapper om = new ObjectMapper();
             return om.readValue(in, new TypeReference<List<Template>>() {});
         } catch (Exception e) {
@@ -220,7 +197,6 @@ public class QueryGenerator {
     }
 
     private InputStream getResourceStream(String name) {
-        // Try both relative and absolute classpath lookups
         InputStream in = Thread.currentThread().getContextClassLoader().getResourceAsStream(name);
         if (in == null) in = QueryGenerator.class.getClassLoader().getResourceAsStream(name);
         if (in == null) in = QueryGenerator.class.getResourceAsStream("/" + name);

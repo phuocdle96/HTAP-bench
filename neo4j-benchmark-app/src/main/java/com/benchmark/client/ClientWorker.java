@@ -1,14 +1,14 @@
 package com.benchmark.client;
 
 import com.benchmark.generator.QueryTemplate;
-import com.benchmark.metrics.Counters;
+import com.benchmark.metrics.FreshnessResult;
 import com.benchmark.metrics.QueryResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.time.*;
+import java.time.temporal.TemporalAccessor;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -21,7 +21,9 @@ public class ClientWorker implements Runnable {
     private final boolean warmup;
     private final boolean singleShot;
     private final List<QueryResult> results;
-    private final Counters counters;                           // NEW
+
+    // NEW: optional sink for freshness samples
+    private final List<FreshnessResult> freshnessSink;
 
     private static final ObjectMapper OM = new ObjectMapper();
 
@@ -42,7 +44,7 @@ public class ClientWorker implements Runnable {
                         boolean warmup,
                         boolean singleShot,
                         List<QueryResult> results,
-                        Counters counters) {                   // NEW
+                        List<FreshnessResult> freshnessSink) {
         this.db = db;
         this.qPool = qPool;
         this.category = category;
@@ -50,22 +52,19 @@ public class ClientWorker implements Runnable {
         this.warmup = warmup;
         this.singleShot = singleShot;
         this.results = results;
-        this.counters = counters;
+        this.freshnessSink = freshnessSink;
     }
 
     @Override
     public void run() {
         try {
             do {
-                // Take a template query from the pool
                 final QueryTemplate.PreparedQuery template = qPool.take();
 
-                // Up to 4 attempts on retriable errors
                 int attempts = 0;
                 while (true) {
                     attempts++;
 
-                    // Clone params per execution; ONLY mutate admissionId to avoid unique conflicts.
                     Map<String, Object> execParams = template.params;
                     if (execParams != null && execParams.containsKey("admissionId")) {
                         execParams = new HashMap<>(execParams);
@@ -73,21 +72,24 @@ public class ClientWorker implements Runnable {
                     }
 
                     QueryTemplate.PreparedQuery exec =
-                            new QueryTemplate.PreparedQuery(template.lang, template.text, execParams);
+                            new QueryTemplate.PreparedQuery(template.lang, template.text, execParams,
+                                                            template.name, template.category);
 
                     long t0 = System.nanoTime();
                     try {
-                        db.executePrepared(exec);
+                        List<Map<String,Object>> rows = db.executePrepared(exec);
                         long dt = System.nanoTime() - t0;
-                        if (!warmup) {
-                            results.add(new QueryResult(category, dt));
+                        if (!warmup) results.add(new QueryResult(category, dt));
+
+                        // If this is the freshness read, compute and store lag
+                        if (!warmup && freshnessSink != null && exec.name.startsWith("HB.2")) {
+                            long lag = computeFreshnessMillisFromRows(rows);
+                            if (lag >= 0) freshnessSink.add(new FreshnessResult(lag));
                         }
-                        if (counters != null) counters.completed.increment();     // NEW
                         break; // success
                     } catch (Throwable t) {
                         String msg = String.valueOf(t.getMessage());
 
-                        // Detect a couple of common retriable cases
                         boolean duplicateId =
                                 msg.contains("already exists with label `Event` and property `eventId`")
                                 || msg.contains("already exists with label 'Event' and property 'eventId'")
@@ -97,7 +99,6 @@ public class ClientWorker implements Runnable {
                                 "org.neo4j.driver.exceptions.TransientException".equals(t.getClass().getName());
 
                         if ((duplicateId || isTransientError) && attempts < 4) {
-                            // backoff: 10-50ms scaled by attempt #
                             try {
                                 Thread.sleep(ThreadLocalRandom.current().nextLong(10, 50) * attempts);
                             } catch (InterruptedException ie) {
@@ -106,7 +107,6 @@ public class ClientWorker implements Runnable {
                             continue; // retry
                         }
 
-                        // --- Enhanced logging: print full query text AND params ---
                         System.err.printf(
                             "[ERR][%s] %s: %s%n" +
                             "   Lang:   %s%n" +
@@ -119,14 +119,11 @@ public class ClientWorker implements Runnable {
                             truncate(exec.text, 4000),
                             toJson(exec.params)
                         );
-                        if (counters != null) counters.failed.increment();        // NEW
-                        break; // give up on this execution
+                        break;
                     }
                 }
 
-                // Return the template to the pool
                 qPool.offer(template);
-
                 if (singleShot) break;
             } while (System.currentTimeMillis() < endWallClockMillis);
         } catch (InterruptedException ie) {
@@ -147,4 +144,45 @@ public class ClientWorker implements Runnable {
             return String.valueOf(o);
         }
     }
+
+    /** Extract 'ts' and compute now - ts in milliseconds. */
+    private static long computeFreshnessMillisFromRows(List<Map<String,Object>> rows) {
+        if (rows == null || rows.isEmpty()) return -1;
+        Object v = rows.get(0).getOrDefault("ts", rows.get(0).get("value"));
+        if (v == null) return -1;
+
+        long tsMillis;
+        if (v instanceof Number n) {
+            tsMillis = n.longValue(); // JanusGraph heartbeat (epoch millis)
+        } else if (v instanceof TemporalAccessor ta) {
+            // Neo4j LocalDateTime (no zone) -> assume UTC
+            if (ta instanceof LocalDateTime ldt) {
+                tsMillis = ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+            } else if (ta instanceof Instant inst) {
+                tsMillis = inst.toEpochMilli();
+            } else {
+                // best effort
+                try {
+                    tsMillis = Instant.from(ta).toEpochMilli();
+                } catch (Exception e) {
+                    return -1;
+                }
+            }
+        } else if (v instanceof String s) {
+            try {
+                tsMillis = Instant.parse(s).toEpochMilli();
+            } catch (Exception ex) {
+                // try parse LocalDateTime without zone
+                try {
+                    LocalDateTime ldt = LocalDateTime.parse(s);
+                    tsMillis = ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+                } catch (Exception ex2) {
+                    return -1;
+                }
+            }
+        } else {
+            return -1;
+        }
+        return System.currentTimeMillis() - tsMillis;
+        }
 }

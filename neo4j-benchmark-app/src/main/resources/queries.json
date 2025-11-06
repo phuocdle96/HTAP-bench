@@ -1,5 +1,21 @@
 [
   {
+    "name": "HB.1 Heartbeat Write",
+    "category": "OLTP",
+    "params": ["hbNow"],
+    "cypher": "MERGE (h:HB {id:'global'}) SET h.ts = datetime()",
+    "gremlin": "g.V().hasLabel('HB').has('id','global').fold().coalesce(unfold(), addV('HB').property('id','global')).property('ts', hbNow)"
+  },
+
+  {
+    "name": "HB.2 Freshness Read",
+    "category": "OLAP",
+    "params": [],
+    "cypher": "MATCH (h:HB {id:'global'}) RETURN h.ts AS ts",
+    "gremlin": "g.V().hasLabel('HB').has('id','global').limit(1).project('ts').by(values('ts'))"
+  },
+
+  {
     "name": "1.1 Patient Lookup",
     "category": "OLTP",
     "params": ["patientId"],
