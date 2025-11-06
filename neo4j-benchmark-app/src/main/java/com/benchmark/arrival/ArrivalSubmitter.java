@@ -50,6 +50,17 @@ public final class ArrivalSubmitter implements Runnable {
                 category, (endNanos - System.nanoTime()) / 1e9);
     }
 
+    public ArrivalSubmitter(double lambda,
+                            ExecutorService workerPool,
+                            DatabaseClient db,
+                            BlockingQueue<QueryTemplate.PreparedQuery> qPool,
+                            String category,
+                            long endMillisWall,
+                            List<QueryResult> collector) {
+        this(lambda, workerPool, db, qPool, category, endMillisWall, collector, null);
+    }
+
+
     @Override
     public void run() {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();

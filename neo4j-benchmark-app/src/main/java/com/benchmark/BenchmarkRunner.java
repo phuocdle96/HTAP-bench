@@ -7,10 +7,9 @@ import com.benchmark.client.DatabaseClient;
 import com.benchmark.client.Neo4jClient;
 import com.benchmark.client.MemgraphClient;
 import com.benchmark.client.JanusGraphClient;
+import com.benchmark.freshness.HeartbeatService;
 import com.benchmark.generator.QueryGenerator;
 import com.benchmark.generator.QueryTemplate;
-import com.benchmark.metrics.Counters;
-import com.benchmark.metrics.FreshnessResult;
 import com.benchmark.metrics.MetricsAggregator;
 import com.benchmark.metrics.QueryResult;
 
@@ -19,9 +18,7 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 import java.io.IOException;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
@@ -29,47 +26,71 @@ import java.util.concurrent.*;
 @Command(
     name = "benchmark-runner",
     mixinStandardHelpOptions = true,
-    description = "HTAP benchmark – CLOSED (token) and OPEN (Poisson) arrival modes with optional ramping"
+    description = "HTAP benchmark – CLOSED (token) and OPEN (Poisson) arrival modes with optional ramping + freshness (HB)"
 )
 public class BenchmarkRunner implements Callable<Integer> {
 
+    /* ---------------- DB flags ---------------- */
     @Option(names = "--uri",      defaultValue = "bolt://localhost:7687") String uri;
     @Option(names = "--user",     defaultValue = "neo4j")                 String user;
     @Option(names = "--password", defaultValue = "neo4j")                 String password;
     @Option(names = "--database", defaultValue = "neo4j")                 String database;
 
+    /* ---------------- worker counts (CLOSED) ---------------- */
     @Option(names = "--oltp-clients",  defaultValue = "8") int oltpClients;
     @Option(names = "--graph-clients", defaultValue = "1") int graphClients;
     @Option(names = "--olap-clients",  defaultValue = "1") int olapClients;
 
+    /* ---------------- OPEN arrival rates ---------------- */
     @Option(names = "--arrival-mode", defaultValue = "CLOSED") ArrivalMode arrivalMode;
-    @Option(names = "--arrival-rate", arity = "1..*", split = ",") List<String> arrivalPairs = new ArrayList<>();
+    @Option(names = "--arrival-rate", arity = "1..*", split = ",",
+            description = "Per-category λ, e.g. OLTP=2000,GRAPH=50,OLAP=0.1 (OPEN mode only)")
+    List<String> arrivalPairs = new ArrayList<>();
 
+    /* ---------------- Duration ---------------- */
     @Option(names = {"-d", "--duration"}, defaultValue = "180") int durationSeconds;
     @Option(names = {"-w", "--warmup"},   defaultValue = "10")  int warmupSeconds;
 
-    @Option(names="--ramp-interval", defaultValue="0") int rampIntervalSec;
-    @Option(names="--ramp-rate-step", arity="0..*", split=",") List<String> rampRatePairs = new ArrayList<>();
-    @Option(names="--max-arrival-rate", arity="0..*", split=",") List<String> maxRatePairs = new ArrayList<>();
+    /* ---------------- Ramping (OPEN) ---------------- */
+    @Option(names="--ramp-interval", defaultValue="0",
+            description = "Seconds between ramps in OPEN mode (0 = no ramping)")
+    int rampIntervalSec;
 
+    @Option(names="--ramp-rate-step", arity="0..*", split=",",
+            description = "Per-interval λ increment per category (OPEN mode)")
+    List<String> rampRatePairs = new ArrayList<>();
+
+    @Option(names="--max-arrival-rate", arity="0..*", split=",",
+            description = "Max λ per category (OPEN mode)")
+    List<String> maxRatePairs = new ArrayList<>();
+
+    /* ---------------- Engine ---------------- */
     @Option(names="--engine", defaultValue = "NEO4J",
             description = "Query engine: NEO4J | MEMGRAPH | JANUSGRAPH")
     String engineName;
 
-    @Option(names="--janus-min-pool", defaultValue = "8")    int janusMinPool;
-    @Option(names="--janus-max-pool", defaultValue = "32")   int janusMaxPool;
+    /* ---------------- JanusGraph tuning ---------------- */
+    @Option(names="--janus-min-pool", defaultValue = "8")   int janusMinPool;
+    @Option(names="--janus-max-pool", defaultValue = "32")  int janusMaxPool;
     @Option(names="--janus-wait-ms",  defaultValue = "30000") int janusWaitMs;
     @Option(names="--janus-timeout-sec", defaultValue = "120") int janusTimeoutSec;
 
+    /* ---------------- Heartbeat (freshness) ---------------- */
+    @Option(names="--hb-enabled", defaultValue = "true", description = "Enable heartbeat freshness") boolean hbEnabled;
+    @Option(names="--hb-write-ms", defaultValue = "2000", description = "Heartbeat write interval ms") long hbWriteMs;
+    @Option(names="--hb-read-ms",  defaultValue = "2000", description = "Heartbeat read interval ms")  long hbReadMs;
+    @Option(names="--hb-month",    defaultValue = "2011-01", description = "Heartbeat window month YYYY-MM") String hbMonthStr;
+
+    /* ---------------- constants ---------------- */
     private static final int MAX_V_THREADS     = 512;
     private static final int MAX_BACKLOG       = 20_000;
     private static final int MAX_SUBMITTER_QPS = 300;
 
+    /* ---------------- internal ---------------- */
     private final Map<String, Double> λ = new HashMap<>();
     private final List<QueryResult>   results = Collections.synchronizedList(new ArrayList<>());
-    private final List<FreshnessResult> freshnessResults = Collections.synchronizedList(new ArrayList<>());
 
-    private final Map<String, Counters> countersByCat = new ConcurrentHashMap<>();
+    /* =============================== helpers =============================== */
 
     private static Map<String,Double> parseDoubleMap(List<String> pairs) {
         Map<String,Double> m = new HashMap<>();
@@ -80,22 +101,21 @@ public class BenchmarkRunner implements Callable<Integer> {
         }
         return m;
     }
+    private static Map<String,Integer> parseIntMap(List<String> pairs) {
+        Map<String,Integer> m = new HashMap<>();
+        for (String s : pairs) {
+            if (s == null || s.isBlank()) continue;
+            String[] a = s.split("=", 2);
+            if (a.length == 2) m.put(a[0].trim().toUpperCase(Locale.ROOT), Integer.parseInt(a[1].trim()));
+        }
+        return m;
+    }
 
     public static void main(String[] args) {
         System.exit(new CommandLine(new BenchmarkRunner()).execute(args));
     }
 
-    private static final class IntervalData {
-        final List<QueryResult> results;
-        final List<FreshnessResult> freshness;
-        final long startMs;
-        IntervalData(List<QueryResult> results, List<FreshnessResult> freshness, long startMs) {
-            this.results = results;
-            this.freshness = freshness;
-            this.startMs = startMs;
-        }
-    }
-
+    /* ========================================================================== */
     @Override
     public Integer call() throws Exception {
         Instant startTs = Instant.now();
@@ -110,14 +130,25 @@ public class BenchmarkRunner implements Callable<Integer> {
         Map<String, Double> rampStep = parseDoubleMap(rampRatePairs);
         Map<String, Double> maxRate  = parseDoubleMap(maxRatePairs);
 
+        /* ---------- connect DB ---------- */
         DatabaseClient db = createClient(this);
         db.connect();
 
+        /* ---------- prepare queries ---------- */
         QueryGenerator.Engine engine = QueryGenerator.Engine.valueOf(engineName.toUpperCase(Locale.ROOT));
         QueryGenerator gen = new QueryGenerator(db, engine);
         Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool = new HashMap<>();
         gen.prepareAllQueries().forEach((k, v) -> qPool.put(k, new LinkedBlockingQueue<>(v)));
 
+        /* ---------- HB (freshness) ---------- */
+        YearMonth hbMonth = YearMonth.parse(hbMonthStr);
+        HeartbeatService hb = new HeartbeatService(
+                db,
+                new HeartbeatService.Config(hbEnabled, hbWriteMs, hbReadMs, hbMonth, engine)
+        );
+        hb.start(); // starts tiny background writer + sampler (excluded from throughput)
+
+        /* ---------- workers ---------- */
         ThreadPoolExecutor workers = new ThreadPoolExecutor(
                 MAX_V_THREADS, MAX_V_THREADS, 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(MAX_BACKLOG),
@@ -128,6 +159,7 @@ public class BenchmarkRunner implements Callable<Integer> {
         long warmEnd    = now + Math.max(0, warmupSeconds) * 1000L;
         long measureEnd = warmEnd + Math.max(0, (durationSeconds - warmupSeconds)) * 1000L;
 
+        /* ---------- warmup ---------- */
         if (warmupSeconds > 0) {
             System.out.println("Launching warmup CLOSED workers...");
             launchClosedWorkers(db, workers, oltpClients, graphClients, olapClients, qPool, warmEnd, true);
@@ -135,38 +167,30 @@ public class BenchmarkRunner implements Callable<Integer> {
             if (sleepMs > 0) Thread.sleep(sleepMs);
         }
 
-        IntervalData openSingle = null;
-
+        /* ---------- measured ---------- */
         if (arrivalMode == ArrivalMode.CLOSED) {
             runMeasuredClosed(db, workers, qPool, measureEnd);
         } else {
             if (rampIntervalSec > 0) {
                 runMeasuredOpenWithRamping(db, workers, qPool, measureEnd, rampIntervalSec, rampStep, maxRate);
             } else {
-                openSingle = runMeasuredOpenSingleInterval(db, workers, qPool, measureEnd);
+                runMeasuredOpenSingleInterval(db, workers, qPool, measureEnd);
             }
         }
 
+        /* ---------- shutdown ---------- */
         workers.shutdown();
         workers.awaitTermination(5, TimeUnit.MINUTES);
+        hb.stopAndReport();  // print + write hb CSV
         db.close();
 
         try {
-            if (arrivalMode == ArrivalMode.OPEN && rampIntervalSec == 0 && openSingle != null) {
-                int elapsedSecs = Math.max(1, (int) Math.ceil(
-                        (System.currentTimeMillis() - openSingle.startMs) / 1000.0));
-
-                new MetricsAggregator(openSingle.results, openSingle.freshness,
-                        elapsedSecs, "benchmark_results.csv",
-                        Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients))
-                        .printReport();
-            } else {
-                new MetricsAggregator(results, freshnessResults,
-                        Math.max(1, durationSeconds - Math.max(0, warmupSeconds)),
-                        "benchmark_results.csv",
-                        Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients))
-                        .printReport();
-            }
+            new com.benchmark.metrics.MetricsAggregator(
+                    results,
+                    Math.max(1, durationSeconds - Math.max(0, warmupSeconds)),
+                    "benchmark_results.csv",
+                    Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients))
+                .printReport();
         } catch (IOException ioe) {
             System.err.println("Failed to write final CSV: " + ioe.getMessage());
         }
@@ -184,33 +208,40 @@ public class BenchmarkRunner implements Callable<Integer> {
                 return new Neo4jClient(cli.uri, cli.user, cli.password, cli.database, cli.durationSeconds);
             case "MEMGRAPH":
                 return new MemgraphClient(cli.uri, cli.user, cli.password);
-            case "JANUSGRAPH":
+            case "JANUSGRAPH": {
                 String host; int port;
                 String u = cli.uri.replace("gremlin://", "").replace("ws://", "").replace("wss://", "");
                 if (u.contains(":")) {
                     String[] hp = u.split(":", 2);
                     host = hp[0]; port = Integer.parseInt(hp[1]);
-                } else {
-                    host = u; port = 8182;
-                }
+                } else { host = u; port = 8182; }
                 return new JanusGraphClient(host, port,
                         cli.janusMinPool, cli.janusMaxPool, cli.janusWaitMs, cli.janusTimeoutSec);
+            }
             default:
                 throw new IllegalArgumentException("Unknown --engine: " + cli.engineName);
         }
     }
 
+    /* ============================ CLOSED (measured) ============================ */
     private void runMeasuredClosed(DatabaseClient db,
                                    ThreadPoolExecutor workers,
                                    Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
                                    long phaseEnd) {
-        submitWorkers(db, workers, oltpClients,  qPool.get("OLTP"),  "OLTP",  phaseEnd, false);
-        submitWorkers(db, workers, graphClients, qPool.get("GRAPH"), "GRAPH", phaseEnd, false);
-        submitWorkers(db, workers, olapClients,  qPool.get("OLAP"),  "OLAP",  phaseEnd, false);
+        launchClosedWorkers(db, workers, oltpClients, graphClients, olapClients, qPool, phaseEnd, false);
         long sleepMs = Math.max(0, phaseEnd - System.currentTimeMillis());
         if (sleepMs > 0) {
             try { Thread.sleep(sleepMs); } catch (InterruptedException ignored) {}
         }
+    }
+
+    private void launchClosedWorkers(DatabaseClient db, ThreadPoolExecutor pool,
+                                     int oltp, int graph, int olap,
+                                     Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
+                                     long endMillis, boolean warm) {
+        submitWorkers(db, pool, oltp,  qPool.get("OLTP"),  "OLTP",  endMillis, warm);
+        submitWorkers(db, pool, graph, qPool.get("GRAPH"), "GRAPH", endMillis, warm);
+        submitWorkers(db, pool, olap,  qPool.get("OLAP"),  "OLAP",  endMillis, warm);
     }
 
     private void submitWorkers(DatabaseClient db, ThreadPoolExecutor pool, int nThreads,
@@ -218,41 +249,36 @@ public class BenchmarkRunner implements Callable<Integer> {
                                long endMillis, boolean warm) {
         if (nThreads <= 0 || q == null) return;
         for (int i = 0; i < nThreads; i++) {
-            pool.submit(new ClientWorker(db, q, cat, endMillis, warm, false, results, freshnessResults));
+            pool.submit(new ClientWorker(db, q, cat, endMillis, warm, /*singleShot*/ false, results));
         }
     }
 
-    private IntervalData runMeasuredOpenSingleInterval(DatabaseClient db,
-                                                       ThreadPoolExecutor workers,
-                                                       Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
-                                                       long measureEnd) {
+    /* ============================ OPEN (single interval) ============================ */
+    private void runMeasuredOpenSingleInterval(DatabaseClient db,
+                                               ThreadPoolExecutor workers,
+                                               Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
+                                               long measureEnd) {
 
-        long intervalStart = System.currentTimeMillis();
-        int plannedSecs = Math.max(1, (int) Math.ceil((measureEnd - intervalStart) / 1000.0));
-        System.out.printf("OPEN mode (measured): single interval of %d s%n", plannedSecs);
+        System.out.printf("OPEN mode (measured): single interval of %d s%n",
+                Math.max(1, (measureEnd - System.currentTimeMillis()) / 1000));
 
         List<QueryResult> intervalResults = Collections.synchronizedList(new ArrayList<>());
-        List<FreshnessResult> intervalFreshness = Collections.synchronizedList(new ArrayList<>());
 
         List<Thread> submitters = new ArrayList<>();
-        submitters.addAll(startShardedSubmitters("OLTP",  λ.getOrDefault("OLTP", 0.0),  workers, db, qPool.get("OLTP"),  measureEnd, intervalResults, intervalFreshness));
-        submitters.addAll(startShardedSubmitters("GRAPH", λ.getOrDefault("GRAPH", 0.0), workers, db, qPool.get("GRAPH"), measureEnd, intervalResults, intervalFreshness));
-        submitters.addAll(startShardedSubmitters("OLAP",  λ.getOrDefault("OLAP", 0.0),  workers, db, qPool.get("OLAP"),  measureEnd, intervalResults, intervalFreshness));
+        submitters.addAll(startShardedSubmitters("OLTP", λ.getOrDefault("OLTP", 0.0), workers, db, qPool.get("OLTP"),  measureEnd, intervalResults));
+        submitters.addAll(startShardedSubmitters("GRAPH", λ.getOrDefault("GRAPH", 0.0), workers, db, qPool.get("GRAPH"), measureEnd, intervalResults));
+        submitters.addAll(startShardedSubmitters("OLAP", λ.getOrDefault("OLAP", 0.0), workers, db, qPool.get("OLAP"),  measureEnd, intervalResults));
 
         for (Thread t : submitters) {
             try { t.join(); } catch (InterruptedException ignored) {}
         }
 
-        int actualSecs = Math.max(1, (int) Math.ceil((measureEnd - intervalStart) / 1000.0));
-        printIntervalReport("interval-01 (OPEN single)", intervalResults, actualSecs);
-
-        // Accumulate into overall sinks as well (so final report has everything if not using openSingle)
+        int secs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(System.currentTimeMillis(), measureEnd)));
+        printIntervalReport("interval-01 (OPEN single)", intervalResults, secs);
         results.addAll(intervalResults);
-        freshnessResults.addAll(intervalFreshness);
-
-        return new IntervalData(intervalResults, intervalFreshness, intervalStart);
     }
 
+    /* ============================ OPEN (ramping) ============================ */
     private void runMeasuredOpenWithRamping(DatabaseClient db,
                                             ThreadPoolExecutor workers,
                                             Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
@@ -275,7 +301,7 @@ public class BenchmarkRunner implements Callable<Integer> {
             long intervalStart = System.currentTimeMillis();
             long plannedEnd = intervalStart + intervalSec * 1000L;
             long intervalEnd = Math.min(plannedEnd, measureEnd);
-            int actualSecs = Math.max(1, (int) Math.ceil((intervalEnd - intervalStart) / 1000.0));
+            int actualSecs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(intervalStart, intervalEnd)));
 
             String intervalName = String.format(Locale.ROOT,
                     "interval-%02d (OPEN, λ OLTP=%s GRAPH=%s OLAP=%s)",
@@ -284,12 +310,11 @@ public class BenchmarkRunner implements Callable<Integer> {
             System.out.printf("Launching %s OPEN submitters...%n", intervalName);
 
             List<QueryResult> intervalResults = Collections.synchronizedList(new ArrayList<>());
-            List<FreshnessResult> intervalFreshness = Collections.synchronizedList(new ArrayList<>());
 
             List<Thread> submitters = new ArrayList<>();
-            submitters.addAll(startShardedSubmitters("OLTP",  current.getOrDefault("OLTP", 0.0),  workers, db, qPool.get("OLTP"),  intervalEnd, intervalResults, intervalFreshness));
-            submitters.addAll(startShardedSubmitters("GRAPH", current.getOrDefault("GRAPH", 0.0), workers, db, qPool.get("GRAPH"), intervalEnd, intervalResults, intervalFreshness));
-            submitters.addAll(startShardedSubmitters("OLAP",  current.getOrDefault("OLAP", 0.0),  workers, db, qPool.get("OLAP"),  intervalEnd, intervalResults, intervalFreshness));
+            submitters.addAll(startShardedSubmitters("OLTP", current.getOrDefault("OLTP", 0.0), workers, db, qPool.get("OLTP"),  intervalEnd, intervalResults));
+            submitters.addAll(startShardedSubmitters("GRAPH", current.getOrDefault("GRAPH", 0.0), workers, db, qPool.get("GRAPH"), intervalEnd, intervalResults));
+            submitters.addAll(startShardedSubmitters("OLAP", current.getOrDefault("OLAP", 0.0), workers, db, qPool.get("OLAP"),  intervalEnd, intervalResults));
 
             for (Thread t : submitters) {
                 try { t.join(); } catch (InterruptedException ignored) {}
@@ -297,38 +322,22 @@ public class BenchmarkRunner implements Callable<Integer> {
 
             System.out.printf("%n--- Interval Completed: %s ---%n%n", intervalName);
             printIntervalReport(intervalName, intervalResults, actualSecs);
-
             results.addAll(intervalResults);
-            freshnessResults.addAll(intervalFreshness);
 
             if (idx < intervals) bumpRate(current, rampStep, maxRate);
         }
     }
 
-    private List<Thread> startShardedSubmitters(String cat, double lambda, ThreadPoolExecutor pool,
-                                                DatabaseClient db, BlockingQueue<QueryTemplate.PreparedQuery> q,
-                                                long intervalEnd,
-                                                List<QueryResult> intervalResults,
-                                                List<FreshnessResult> intervalFreshness) {
-        List<Thread> threads = new ArrayList<>();
-        if (lambda <= 0.0 || q == null) return threads;
-
-        int shards = (int) Math.ceil(lambda / MAX_SUBMITTER_QPS);
-        double λPerShard = lambda / shards;
-        System.out.printf("Submitter %s will run at %.0f qps × %d shard(s)%n", cat, λPerShard, shards);
-
-        for (int i = 0; i < shards; i++) {
-            Thread t = Thread.startVirtualThread(
-                    new ArrivalSubmitter(λPerShard, pool, db, q, cat, intervalEnd, intervalResults, intervalFreshness));
-            threads.add(t);
-        }
-        return threads;
-    }
+    /* ============================ utilities ============================ */
 
     private static String fmtRate(Double d) {
         if (d == null) return "0.0";
         if (d < 1.0) return String.format(Locale.ROOT, "%.2f", d);
         return String.format(Locale.ROOT, "%.0f", d);
+    }
+
+    private static double intervalDurationSeconds(long startMs, long endMs) {
+        return Math.max(0.001, (endMs - startMs) / 1000.0);
     }
 
     private void bumpRate(Map<String, Double> current,
@@ -345,7 +354,7 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     private void printIntervalReport(String intervalName,
                                      List<QueryResult> intervalResults,
-                                     int actualIntervalSecs) {
+                                     int actualSecs) {
         String safe = intervalName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
         if (safe.startsWith("-")) safe = safe.substring(1);
         if (safe.endsWith("-"))  safe = safe.substring(0, safe.length()-1);
@@ -354,13 +363,32 @@ public class BenchmarkRunner implements Callable<Integer> {
         try {
             new MetricsAggregator(
                     intervalResults,
-                    Math.max(1, actualIntervalSecs),
+                    Math.max(1, actualSecs),
                     csvFile,
                     Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients)
             ).printReport();
         } catch (IOException ioe) {
             System.err.println("Failed to write interval CSV (" + csvFile + "): " + ioe.getMessage());
         }
+    }
+
+    private List<Thread> startShardedSubmitters(String cat, double lambda, ThreadPoolExecutor pool,
+                                                DatabaseClient db, BlockingQueue<QueryTemplate.PreparedQuery> q,
+                                                long intervalEnd,
+                                                List<QueryResult> intervalResults) {
+        List<Thread> threads = new ArrayList<>();
+        if (lambda <= 0.0 || q == null) return threads;
+
+        int shards = (int) Math.ceil(lambda / MAX_SUBMITTER_QPS);
+        double λPerShard = lambda / shards;
+        System.out.printf("Submitter %s will run at %.0f qps × %d shard(s)%n", cat, λPerShard, shards);
+
+        for (int i = 0; i < shards; i++) {
+            Thread t = Thread.startVirtualThread(
+                    new ArrivalSubmitter(λPerShard, pool, db, q, cat, intervalEnd, intervalResults));
+            threads.add(t);
+        }
+        return threads;
     }
 
     private static String human(Duration d) {
