@@ -6,7 +6,6 @@
     "cypher": "MATCH (p:Patient {patientId: $patientId}) RETURN p.age, p.gender, p.nationality",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).project('age','gender','nationality').by(coalesce(values('age'), constant(0))).by(coalesce(values('gender'), constant('N/A'))).by(coalesce(values('nationality'), constant('N/A')))"
   },
-
   {
     "name": "1.2 Patient Admission",
     "category": "OLTP",
@@ -14,7 +13,6 @@
     "cypher": "MATCH (p:Patient {patientId: $patientId}) MATCH (hcu:HealthcareUnit {unitId: $unitId}) MATCH (diag:Diagnosis {code: $diagnosisCode}) CREATE (adm:Event:Admission {eventId: $admissionId, date: $admissionDate}) CREATE (p)-[:HAD_EVENT]->(adm) CREATE (adm)-[:PERFORMED_AT]->(hcu) CREATE (adm)-[:HAS_DIAGNOSIS {type: 'PRIMARY'}]->(diag)",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('hcu').V().hasLabel('Diagnosis').has('code', diagnosisCode).limit(1).as('diag').addV('Event').property('eventId', admissionId).property('eventType','Admission').property('eventDate', admissionDate).property('date', admissionDate).as('adm').addE('HAD_EVENT').from('p').to('adm').addE('PERFORMED_AT').from('adm').to('hcu').addE('HAS_DIAGNOSIS').from('adm').to('diag').property('type','PRIMARY').iterate()"
   },
-
   {
     "name": "2.2 Hospital Admission Analysis",
     "category": "OLAP",
@@ -22,7 +20,6 @@
     "cypher": "MATCH (adm:Admission)-[:PERFORMED_AT]->(hcu:HealthcareUnit) WHERE adm.date >= $startDate AND adm.date < $endDate RETURN hcu.unitId AS hospital, count(adm) AS numberOfAdmissions ORDER BY numberOfAdmissions DESC LIMIT 20",
     "gremlin": "g.V().hasLabel('Event').has('eventType','Admission').has('eventDate', gte(startDate)).has('eventDate', lt(endDate)).out('PERFORMED_AT').hasLabel('HealthcareUnit').values('unitId').groupCount().unfold().order().by(values, decr).limit(20).project('hospital','numberOfAdmissions').by(keys).by(values)"
   },
-
   {
     "name": "2.3 Disease Analysis",
     "category": "OLAP",
@@ -30,7 +27,6 @@
     "cypher": "MATCH (e:Event)-[r:HAS_DIAGNOSIS]->(d:Diagnosis) WHERE r.type = 'PRIMARY' RETURN d.code AS diagnosisCode, count(e) AS totalEvents ORDER BY totalEvents DESC LIMIT 25",
     "gremlin": "g.V().hasLabel('Event').as('e').outE('HAS_DIAGNOSIS').has('type','PRIMARY').inV().hasLabel('Diagnosis').values('code').groupCount().unfold().order().by(values, decr).limit(25).project('diagnosisCode','totalEvents').by(keys).by(values)"
   },
-
   {
     "name": "3.1 Readmission Analysis",
     "category": "GRAPH",
@@ -38,7 +34,6 @@
     "cypher": "MATCH (p:Patient {patientId: $patientId})-[:HAD_EVENT]->(discharge:Discharge) MATCH (p)-[:HAD_EVENT]->(admission:Admission) WHERE admission.dateEpochDays > discharge.dateEpochDays WITH p, discharge, admission, (admission.dateEpochDays - discharge.dateEpochDays) AS daysToReadmission WHERE daysToReadmission > 0 AND daysToReadmission <= $windowDays RETURN p.patientId AS patient, discharge.date AS dischargeDate, admission.date AS readmissionDate, daysToReadmission ORDER BY daysToReadmission",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').out('HAD_EVENT').hasLabel('Discharge').as('d').select('p').out('HAD_EVENT').hasLabel('Admission').as('a').where(select('a').values('dateEpochDays').is(gt(select('d').values('dateEpochDays')))).project('patient','dischargeDate','readmissionDate','daysToReadmission').by(select('p').values('patientId')).by(coalesce(select('d').values('date'), constant('N/A'))).by(coalesce(select('a').values('date'), constant('N/A'))).by(math('a - b').by(select('a').values('dateEpochDays')).by(select('d').values('dateEpochDays'))).where(select('daysToReadmission').and(is(gt(0)), is(lte(windowDays)))).order().by(select('daysToReadmission'), asc)"
   },
-
   {
     "name": "3.2 Disease Co-occurrence",
     "category": "GRAPH",

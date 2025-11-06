@@ -1,13 +1,10 @@
 package com.benchmark.client;
 
 import com.benchmark.generator.QueryTemplate;
-import com.benchmark.metrics.FreshnessResult;
 import com.benchmark.metrics.QueryResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.time.*;
-import java.time.temporal.TemporalAccessor;
 import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
@@ -22,9 +19,6 @@ public class ClientWorker implements Runnable {
     private final boolean singleShot;
     private final List<QueryResult> results;
 
-    // NEW: optional sink for freshness samples
-    private final List<FreshnessResult> freshnessSink;
-
     private static final ObjectMapper OM = new ObjectMapper();
 
     public ClientWorker(DatabaseClient db,
@@ -34,17 +28,6 @@ public class ClientWorker implements Runnable {
                         boolean warmup,
                         boolean singleShot,
                         List<QueryResult> results) {
-        this(db, qPool, category, endWallClockMillis, warmup, singleShot, results, null);
-    }
-
-    public ClientWorker(DatabaseClient db,
-                        BlockingQueue<QueryTemplate.PreparedQuery> qPool,
-                        String category,
-                        long endWallClockMillis,
-                        boolean warmup,
-                        boolean singleShot,
-                        List<QueryResult> results,
-                        List<FreshnessResult> freshnessSink) {
         this.db = db;
         this.qPool = qPool;
         this.category = category;
@@ -52,7 +35,6 @@ public class ClientWorker implements Runnable {
         this.warmup = warmup;
         this.singleShot = singleShot;
         this.results = results;
-        this.freshnessSink = freshnessSink;
     }
 
     @Override
@@ -77,15 +59,9 @@ public class ClientWorker implements Runnable {
 
                     long t0 = System.nanoTime();
                     try {
-                        List<Map<String,Object>> rows = db.executePrepared(exec);
+                        db.executePrepared(exec);
                         long dt = System.nanoTime() - t0;
                         if (!warmup) results.add(new QueryResult(category, dt));
-
-                        // If this is the freshness read, compute and store lag
-                        if (!warmup && freshnessSink != null && exec.name.startsWith("HB.2")) {
-                            long lag = computeFreshnessMillisFromRows(rows);
-                            if (lag >= 0) freshnessSink.add(new FreshnessResult(lag));
-                        }
                         break; // success
                     } catch (Throwable t) {
                         String msg = String.valueOf(t.getMessage());
@@ -144,45 +120,4 @@ public class ClientWorker implements Runnable {
             return String.valueOf(o);
         }
     }
-
-    /** Extract 'ts' and compute now - ts in milliseconds. */
-    private static long computeFreshnessMillisFromRows(List<Map<String,Object>> rows) {
-        if (rows == null || rows.isEmpty()) return -1;
-        Object v = rows.get(0).getOrDefault("ts", rows.get(0).get("value"));
-        if (v == null) return -1;
-
-        long tsMillis;
-        if (v instanceof Number n) {
-            tsMillis = n.longValue(); // JanusGraph heartbeat (epoch millis)
-        } else if (v instanceof TemporalAccessor ta) {
-            // Neo4j LocalDateTime (no zone) -> assume UTC
-            if (ta instanceof LocalDateTime ldt) {
-                tsMillis = ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
-            } else if (ta instanceof Instant inst) {
-                tsMillis = inst.toEpochMilli();
-            } else {
-                // best effort
-                try {
-                    tsMillis = Instant.from(ta).toEpochMilli();
-                } catch (Exception e) {
-                    return -1;
-                }
-            }
-        } else if (v instanceof String s) {
-            try {
-                tsMillis = Instant.parse(s).toEpochMilli();
-            } catch (Exception ex) {
-                // try parse LocalDateTime without zone
-                try {
-                    LocalDateTime ldt = LocalDateTime.parse(s);
-                    tsMillis = ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
-                } catch (Exception ex2) {
-                    return -1;
-                }
-            }
-        } else {
-            return -1;
-        }
-        return System.currentTimeMillis() - tsMillis;
-        }
 }

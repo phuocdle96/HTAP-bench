@@ -14,24 +14,22 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 /**
  * Heartbeat writer + sampler for freshness measurement.
  *
- * - Writes tiny "heartbeat" Events at a low fixed rate (default 2s) using the SAME
- *   labels/properties/indexed predicates that OLAP queries use per engine.
- * - Samples the most recent visible heartbeat via the SAME predicates to compute:
+ * - Writes tiny "heartbeat" Events at a fixed rate using SAME label/props the OLAP range uses.
+ * - Samples the most recent visible heartbeat to compute:
  *      freshness = now_ms - ts_write_ms_of_latest_visible_heartbeat
- * - Logs to heartbeat_freshness.csv and prints a short percentile summary on stop().
+ * - Prints effective config + inter-write/read deltas for verification.
  *
- * Notes on per-engine mapping:
- *   Neo4j:     (:Event:Heartbeat {date: LocalDate, subtype:'Heartbeat', ts_write_ms:long, seq:long})
- *   Memgraph:  (:Event:Heartbeat {date: 'YYYYMMDD' (string), subtype:'Heartbeat', ts_write_ms, seq})
- *   JanusGraph: Event vertex with {eventType:'Heartbeat', eventDate: long YYYYMMDD, ts_write_ms, seq}
+ * Neo4j:     (:Event:Heartbeat {date: LocalDate, subtype:'Heartbeat', ts_write_ms:long, seq:long})
+ * Memgraph:  (:Event:Heartbeat {date: 'YYYYMMDD', subtype:'Heartbeat', ts_write_ms, seq})
+ * JanusGraph: Event vertex with {eventType:'Heartbeat', eventDate: YYYYMMDD(long), ts_write_ms, seq}
  */
 public final class HeartbeatService implements AutoCloseable {
 
     public static final class Config {
         public final boolean enabled;
-        public final long    writeIntervalMs;   // default 2000
-        public final long    readIntervalMs;    // default 2000
-        public final YearMonth hbMonth;         // fixed window for HB (e.g., 2011-01)
+        public final long    writeIntervalMs;
+        public final long    readIntervalMs;
+        public final YearMonth hbMonth;
         public final QueryGenerator.Engine engine;
 
         public Config(boolean enabled, long writeIntervalMs, long readIntervalMs,
@@ -58,9 +56,15 @@ public final class HeartbeatService implements AutoCloseable {
     private final List<FreshnessSample> samples = Collections.synchronizedList(new ArrayList<>());
     private volatile boolean running = false;
 
-    // Pre-bound window (first-of-month .. first-of-next-month) as engine-typed values
+    // window bounds as engine-typed values
     private final Object startDateParam;
     private final Object endDateParam;
+
+    // verification helpers
+    private volatile long lastWriteWall = -1L;
+    private volatile long lastSampleWall = -1L;
+    private final List<Long> writeDeltas = Collections.synchronizedList(new ArrayList<>());
+    private final List<Long> readDeltas  = Collections.synchronizedList(new ArrayList<>());
 
     public HeartbeatService(DatabaseClient db, Config cfg) {
         this.db = db;
@@ -75,8 +79,6 @@ public final class HeartbeatService implements AutoCloseable {
                 endDateParam   = toYYYYMMDDLong(end);
             }
             case NEO4J, MEMGRAPH -> {
-                // Neo4j wants LocalDate; Memgraph dataset typically stored date as string.
-                // We pass both typed and string per engine on use.
                 startDateParam = start;
                 endDateParam   = end;
             }
@@ -89,46 +91,46 @@ public final class HeartbeatService implements AutoCloseable {
         if (!cfg.enabled) return;
         running = true;
 
+        System.out.printf("[HB] start: write=%d ms, read=%d ms, window=%s%n",
+                cfg.writeIntervalMs, cfg.readIntervalMs, cfg.hbMonth);
+
         sched.scheduleAtFixedRate(this::safeWriteBeat, 0, cfg.writeIntervalMs, MILLISECONDS);
         sched.scheduleAtFixedRate(this::safeSampleFreshness, cfg.readIntervalMs, cfg.readIntervalMs, MILLISECONDS);
     }
 
-    /** Stop, flush, and print a percentile summary. */
+    /** Stop, flush, print percentiles + delta verification. */
     public void stopAndReport() {
         if (!cfg.enabled) return;
         running = false;
         sched.shutdown();
         try { sched.awaitTermination(10, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
 
-        // CSV
-        try (var rl = new com.benchmark.util.ResultsLogger("heartbeat_freshness.csv",
-                "timestamp","seq","freshness_ms")) {
-            synchronized (samples) {
-                for (FreshnessSample s : samples) {
-                    rl.log(Map.of(
-                            "seq", s.seq(),
-                            "freshness_ms", s.freshnessMs()
-                    ));
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[HB] Failed to write heartbeat_freshness.csv: " + e.getMessage());
-        }
-
         // Console percentiles
         var arr = samples.stream().mapToLong(FreshnessSample::freshnessMs).sorted().toArray();
         if (arr.length == 0) {
             System.out.println("[HB] No freshness samples collected.");
-            return;
+        } else {
+            System.out.println("\n--- Freshness (Heartbeat) ---");
+            System.out.printf("Samples: %,d (interval %d ms write / %d ms read)%n",
+                    arr.length, cfg.writeIntervalMs, cfg.readIntervalMs);
+            System.out.printf("Latest:  %,d ms%n", arr[arr.length-1]);
+            System.out.printf("p50:     %,d ms%n", pct(arr, 50));
+            System.out.printf("p95:     %,d ms%n", pct(arr, 95));
+            System.out.printf("p99:     %,d ms%n", pct(arr, 99));
+            System.out.printf("max:     %,d ms%n", arr[arr.length-1]);
+            System.out.println("----------------------------------------");
         }
-        System.out.println("\n--- Freshness (Heartbeat) ---");
-        System.out.printf("Samples: %,d (interval %d ms write / %d ms read)%n", arr.length, cfg.writeIntervalMs, cfg.readIntervalMs);
-        System.out.printf("Latest:  %,d ms%n", arr[arr.length-1]);
-        System.out.printf("p50:     %,d ms%n", pct(arr, 50));
-        System.out.printf("p95:     %,d ms%n", pct(arr, 95));
-        System.out.printf("p99:     %,d ms%n", pct(arr, 99));
-        System.out.printf("max:     %,d ms%n", arr[arr.length-1]);
-        System.out.println("----------------------------------------");
+
+        if (!writeDeltas.isEmpty()) {
+            long[] w = writeDeltas.stream().mapToLong(Long::longValue).sorted().toArray();
+            System.out.printf("[HB] write Δms p50=%d p95=%d p99=%d (n=%d)%n",
+                    pct(w,50), pct(w,95), pct(w,99), w.length);
+        }
+        if (!readDeltas.isEmpty()) {
+            long[] r = readDeltas.stream().mapToLong(Long::longValue).sorted().toArray();
+            System.out.printf("[HB] read  Δms p50=%d p95=%d p99=%d (n=%d)%n",
+                    pct(r,50), pct(r,95), pct(r,99), r.length);
+        }
     }
 
     @Override public void close() { stopAndReport(); }
@@ -138,7 +140,10 @@ public final class HeartbeatService implements AutoCloseable {
     private void safeWriteBeat() {
         try {
             if (!running) return;
-            writeBeat();
+            long now = System.currentTimeMillis();
+            if (lastWriteWall > 0) writeDeltas.add(now - lastWriteWall);
+            lastWriteWall = now;
+            writeBeat(now);
         } catch (Throwable t) {
             System.err.println("[HB][write] " + t.getClass().getSimpleName() + ": " + t.getMessage());
         }
@@ -147,9 +152,12 @@ public final class HeartbeatService implements AutoCloseable {
     private void safeSampleFreshness() {
         try {
             if (!running) return;
+            long now = System.currentTimeMillis();
+            if (lastSampleWall > 0) readDeltas.add(now - lastSampleWall);
+            lastSampleWall = now;
+
             Long ts = readLatestWriteTimestamp();
             if (ts != null && ts > 0) {
-                long now = System.currentTimeMillis();
                 long fresh = Math.max(0, now - ts);
                 long s = seq.get();
                 samples.add(new FreshnessSample(now, fresh, s));
@@ -159,11 +167,11 @@ public final class HeartbeatService implements AutoCloseable {
         }
     }
 
-    private void writeBeat() {
+    private void writeBeat(long now) {
         long idSeq = seq.incrementAndGet();
-        long ts = System.currentTimeMillis();
+        long ts = now;
 
-        // Choose a day inside HB month to ensure it falls in the pre-bound window
+        // choose a day inside HB month → falls within pre-bound window
         LocalDate day = LocalDate.of(cfg.hbMonth.getYear(), cfg.hbMonth.getMonthValue(), 1 + (int)(idSeq % 28));
 
         switch (cfg.engine) {
@@ -173,7 +181,7 @@ public final class HeartbeatService implements AutoCloseable {
                                 " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
                 Map<String,Object> p = Map.of(
                         "id",  "hb_" + idSeq,
-                        "date", day,            // Neo4j DATE type (driver handles LocalDate)
+                        "date", day,
                         "ts",  ts,
                         "seq", idSeq
                 );
@@ -181,7 +189,6 @@ public final class HeartbeatService implements AutoCloseable {
             }
 
             case MEMGRAPH -> {
-                // Memgraph dataset has date stored as string 'YYYYMMDD'
                 String cypher =
                         "CREATE (e:Event:Heartbeat {" +
                                 " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
@@ -195,7 +202,6 @@ public final class HeartbeatService implements AutoCloseable {
             }
 
             case JANUSGRAPH -> {
-                // Gremlin: Event vertex with eventType + eventDate long
                 String g =
                         "addV('Event')" +
                         ".property('eventId', id)" +
@@ -253,7 +259,7 @@ public final class HeartbeatService implements AutoCloseable {
                         ".has('eventType','Heartbeat')" +
                         ".has('eventDate', gte(startDate))" +
                         ".has('eventDate', lt(endDate))" +
-                        ".order().by('seq', decr)" +
+                        ".order().by('seq', desc)" +
                         ".limit(1)" +
                         ".project('ts','seq')" +
                         ".by(values('ts_write_ms'))" +
@@ -273,6 +279,8 @@ public final class HeartbeatService implements AutoCloseable {
         }
     }
 
+    /* ========================= helpers ========================= */
+
     private static long toYYYYMMDDLong(LocalDate d) {
         return d.getYear() * 10000L + d.getMonthValue() * 100L + d.getDayOfMonth();
     }
@@ -290,4 +298,7 @@ public final class HeartbeatService implements AutoCloseable {
         double w = rank - lo;
         return (long)Math.round(sorted[lo] * (1.0 - w) + sorted[hi] * w);
     }
+
+    /** Small record to hold samples. */
+    public record FreshnessSample(long wallClockMs, long freshnessMs, long seq) {}
 }

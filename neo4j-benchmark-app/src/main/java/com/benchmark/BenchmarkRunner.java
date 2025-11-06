@@ -2,11 +2,7 @@ package com.benchmark;
 
 import com.benchmark.arrival.ArrivalMode;
 import com.benchmark.arrival.ArrivalSubmitter;
-import com.benchmark.client.ClientWorker;
-import com.benchmark.client.DatabaseClient;
-import com.benchmark.client.Neo4jClient;
-import com.benchmark.client.MemgraphClient;
-import com.benchmark.client.JanusGraphClient;
+import com.benchmark.client.*;
 import com.benchmark.freshness.HeartbeatService;
 import com.benchmark.generator.QueryGenerator;
 import com.benchmark.generator.QueryTemplate;
@@ -77,8 +73,8 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     /* ---------------- Heartbeat (freshness) ---------------- */
     @Option(names="--hb-enabled", defaultValue = "true", description = "Enable heartbeat freshness") boolean hbEnabled;
-    @Option(names="--hb-write-ms", defaultValue = "2000", description = "Heartbeat write interval ms") long hbWriteMs;
-    @Option(names="--hb-read-ms",  defaultValue = "2000", description = "Heartbeat read interval ms")  long hbReadMs;
+    @Option(names="--hb-write-ms", defaultValue = "1000", description = "Heartbeat write interval ms") long hbWriteMs;  // tighter default
+    @Option(names="--hb-read-ms",  defaultValue = "250",  description = "Heartbeat read interval ms")  long hbReadMs;   // tighter default
     @Option(names="--hb-month",    defaultValue = "2011-01", description = "Heartbeat window month YYYY-MM") String hbMonthStr;
 
     /* ---------------- constants ---------------- */
@@ -184,13 +180,20 @@ public class BenchmarkRunner implements Callable<Integer> {
         hb.stopAndReport();  // print + write hb CSV
         db.close();
 
+        // Final full-run report
         try {
+            boolean openMode = (arrivalMode == ArrivalMode.OPEN);
+            Map<String, Double> rates = openMode ? ratesOf(λ.getOrDefault("OLTP",0.0),
+                                                           λ.getOrDefault("GRAPH",0.0),
+                                                           λ.getOrDefault("OLAP",0.0)) : Map.of();
             new com.benchmark.metrics.MetricsAggregator(
                     results,
                     Math.max(1, durationSeconds - Math.max(0, warmupSeconds)),
                     "benchmark_results.csv",
-                    Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients))
-                .printReport();
+                    Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients),
+                    openMode,
+                    rates
+            ).printReport();
         } catch (IOException ioe) {
             System.err.println("Failed to write final CSV: " + ioe.getMessage());
         }
@@ -249,7 +252,7 @@ public class BenchmarkRunner implements Callable<Integer> {
                                long endMillis, boolean warm) {
         if (nThreads <= 0 || q == null) return;
         for (int i = 0; i < nThreads; i++) {
-            pool.submit(new ClientWorker(db, q, cat, endMillis, warm, /*singleShot*/ false, results));
+            pool.submit(new com.benchmark.client.ClientWorker(db, q, cat, endMillis, warm, /*singleShot*/ false, results));
         }
     }
 
@@ -259,8 +262,10 @@ public class BenchmarkRunner implements Callable<Integer> {
                                                Map<String, BlockingQueue<QueryTemplate.PreparedQuery>> qPool,
                                                long measureEnd) {
 
-        System.out.printf("OPEN mode (measured): single interval of %d s%n",
-                Math.max(1, (measureEnd - System.currentTimeMillis()) / 1000));
+        // record intervalStart BEFORE launching submitters
+        long intervalStart = System.currentTimeMillis();
+        int plannedSecs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(intervalStart, measureEnd)));
+        System.out.printf("OPEN mode (measured): single interval of %d s%n", plannedSecs);
 
         List<QueryResult> intervalResults = Collections.synchronizedList(new ArrayList<>());
 
@@ -273,8 +278,15 @@ public class BenchmarkRunner implements Callable<Integer> {
             try { t.join(); } catch (InterruptedException ignored) {}
         }
 
-        int secs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(System.currentTimeMillis(), measureEnd)));
-        printIntervalReport("interval-01 (OPEN single)", intervalResults, secs);
+        int actualSecs = Math.max(1, (int) Math.ceil(intervalDurationSeconds(intervalStart, measureEnd)));
+
+        printIntervalReport("interval-01 (OPEN single)",
+                intervalResults,
+                actualSecs,
+                /*openMode*/ true,
+                ratesOf(λ.getOrDefault("OLTP",0.0),
+                        λ.getOrDefault("GRAPH",0.0),
+                        λ.getOrDefault("OLAP",0.0)));
         results.addAll(intervalResults);
     }
 
@@ -321,7 +333,7 @@ public class BenchmarkRunner implements Callable<Integer> {
             }
 
             System.out.printf("%n--- Interval Completed: %s ---%n%n", intervalName);
-            printIntervalReport(intervalName, intervalResults, actualSecs);
+            printIntervalReport(intervalName, intervalResults, actualSecs, true, current);
             results.addAll(intervalResults);
 
             if (idx < intervals) bumpRate(current, rampStep, maxRate);
@@ -354,7 +366,9 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     private void printIntervalReport(String intervalName,
                                      List<QueryResult> intervalResults,
-                                     int actualSecs) {
+                                     int actualSecs,
+                                     boolean openMode,
+                                     Map<String, Double> arrivalRates) {
         String safe = intervalName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
         if (safe.startsWith("-")) safe = safe.substring(1);
         if (safe.endsWith("-"))  safe = safe.substring(0, safe.length()-1);
@@ -365,7 +379,9 @@ public class BenchmarkRunner implements Callable<Integer> {
                     intervalResults,
                     Math.max(1, actualSecs),
                     csvFile,
-                    Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients)
+                    Map.of("OLTP", oltpClients, "GRAPH", graphClients, "OLAP", olapClients),
+                    openMode,
+                    (arrivalRates == null ? Map.of() : arrivalRates)
             ).printReport();
         } catch (IOException ioe) {
             System.err.println("Failed to write interval CSV (" + csvFile + "): " + ioe.getMessage());
@@ -393,5 +409,13 @@ public class BenchmarkRunner implements Callable<Integer> {
 
     private static String human(Duration d) {
         return String.format("%d:%02d.%03d", d.toMinutes(), d.toSecondsPart(), d.toMillisPart());
+    }
+
+    private static Map<String, Double> ratesOf(double oltp, double graph, double olap) {
+        Map<String, Double> m = new HashMap<>();
+        m.put("OLTP", oltp);
+        m.put("GRAPH", graph);
+        m.put("OLAP", olap);
+        return m;
     }
 }
