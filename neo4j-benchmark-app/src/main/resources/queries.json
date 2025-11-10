@@ -4,6 +4,7 @@
     "category": "OLTP",
     "params": ["id","age","gender","nationality","education"],
     "cypher": "MERGE (p:Patient {patientId: $id}) ON CREATE SET p.age=$age, p.gender=$gender, p.nationality=$nationality, p.educationLevel=$education ON MATCH SET p.age=$age RETURN p",
+    "memgraph": "MERGE (p:Patient {patientId: $id}) ON CREATE SET p.age=$age, p.gender=$gender, p.nationality=$nationality, p.educationLevel=$education ON MATCH SET p.age=$age RETURN p",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', id).fold().coalesce(unfold(), addV('Patient').property('patientId', id).property('gender', gender).property('nationality', nationality).property('educationLevel', education)).property('age', age)"
   },
   {
@@ -11,6 +12,7 @@
     "category": "OLTP",
     "params": ["id"],
     "cypher": "MATCH (p:Patient {patientId:$id}) RETURN p.age AS age, p.gender AS gender, p.nationality AS nationality",
+    "memgraph": "MATCH (p:Patient {patientId:$id}) RETURN p.age AS age, p.gender AS gender, p.nationality AS nationality",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', id).limit(1).project('age','gender','nationality').by(coalesce(values('age'), constant(0))).by(coalesce(values('gender'), constant('N/A'))).by(coalesce(values('nationality'), constant('N/A')))"
   },
   {
@@ -18,27 +20,31 @@
     "category": "OLTP",
     "params": ["patientId","eventId","admissionDate","specialty","unitId","diagnosisCode"],
     "cypher": "MATCH (p:Patient {patientId:$patientId}) MATCH (h:HealthcareUnit {unitId:$unitId}) MATCH (d:Diagnosis {code:$diagnosisCode}) CREATE (a:Event:Admission {eventId:$eventId, date:$admissionDate, specialty:$specialty})-[:PERFORMED_AT]->(h) CREATE (p)-[:HAD_EVENT]->(a) CREATE (a)-[:HAS_DIAGNOSIS {type:'PRIMARY'}]->(d)",
-    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').V().hasLabel('Diagnosis').has('code', diagnosisCode).limit(1).as('d').addV('Event').property('eventId', eventId).property('eventType','Admission').property('eventDate', admissionDate).property('specialty', specialty).as('a').addE('PERFORMED_AT').from('a').to('h').addE('HAD_EVENT').from('p').to('a').addE('HAS_DIAGNOSIS').from('a').to('d').property('type','PRIMARY')"
+    "memgraph": "MATCH (p:Patient {patientId:$patientId}) MATCH (h:HealthcareUnit {unitId:$unitId}) MATCH (d:Diagnosis {code:$diagnosisCode}) CREATE (a:Event {subtype:'Admission', eventId:$eventId, date:$admissionDate, specialty:$specialty})-[:PERFORMED_AT]->(h) CREATE (p)-[:HAD_EVENT]->(a) CREATE (a)-[:HAS_DIAGNOSIS {type:'PRIMARY'}]->(d)",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').V().hasLabel('Diagnosis').has('code', diagnosisCode).limit(1).as('d').addV('Event').property('eventId', eventId).property('eventType','Admission').property('date', admissionDate).property('specialty', specialty).as('a').addE('PERFORMED_AT').from('a').to('h').addE('HAD_EVENT').from('p').to('a').addE('HAS_DIAGNOSIS').from('a').to('d').property('type','PRIMARY')"
   },
   {
     "name": "1.3 Add Procedure to Admission (Chemotherapy)",
     "category": "OLTP",
     "params": ["eventId","chemoDate","schema","unitId"],
     "cypher": "MATCH (adm:Admission {eventId:$eventId}) MATCH (h:HealthcareUnit {unitId:$unitId}) CREATE (c:Event:Procedure:Chemotherapy {eventId: randomUUID(), date:$chemoDate, schema_1:$schema}) CREATE (adm)-[:INCLUDED_PROCEDURE]->(c) CREATE (c)-[:PERFORMED_AT]->(h)",
-    "gremlin": "g.V().hasLabel('Admission').has('eventId', eventId).limit(1).as('a').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').addV('Event').property('eventId', UUID.randomUUID().toString()).property('eventType','Procedure').property('procedureType','Chemotherapy').property('eventDate', chemoDate).property('schema_1', schema).as('c').addE('INCLUDED_PROCEDURE').from('a').to('c').addE('PERFORMED_AT').from('c').to('h')"
+    "memgraph": "MATCH (adm:Event {subtype:'Admission', eventId:$eventId}) MATCH (h:HealthcareUnit {unitId:$unitId}) CREATE (c:Event {subtype:'Procedure;Chemotherapy', eventId: randomUUID(), date:$chemoDate, schema_1:$schema}) CREATE (adm)-[:INCLUDED_PROCEDURE]->(c) CREATE (c)-[:PERFORMED_AT]->(h)",
+    "gremlin": "g.V().hasLabel('Event').has('eventType','Admission').has('eventId', eventId).limit(1).as('a').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').addV('Event').property('eventId', UUID.randomUUID().toString()).property('eventType','Procedure;Chemotherapy').property('date', chemoDate).property('schema_1', schema).as('c').addE('INCLUDED_PROCEDURE').from('a').to('c').addE('PERFORMED_AT').from('c').to('h')"
   },
   {
     "name": "1.4 Patient Discharge",
     "category": "OLTP",
     "params": ["patientId","eventId","dischargeDate","deathIndicator"],
     "cypher": "MATCH (p:Patient {patientId:$patientId}) CREATE (d:Event:Discharge {eventId:$eventId, date:$dischargeDate, deathIndicator:$deathIndicator}) CREATE (p)-[:HAD_EVENT]->(d)",
-    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').addV('Event').property('eventId', eventId).property('eventType','Discharge').property('eventDate', dischargeDate).property('deathIndicator', deathIndicator).as('d').addE('HAD_EVENT').from('p').to('d')"
+    "memgraph": "MATCH (p:Patient {patientId:$patientId}) CREATE (d:Event {subtype:'Discharge', eventId:$eventId, date:$dischargeDate, deathIndicator:$deathIndicator}) CREATE (p)-[:HAD_EVENT]->(d)",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').addV('Event').property('eventId', eventId).property('eventType','Discharge').property('date', dischargeDate).property('deathIndicator', deathIndicator).as('d').addE('HAD_EVENT').from('p').to('d')"
   },
   {
     "name": "1.5 Add Secondary Diagnosis",
     "category": "OLTP",
     "params": ["eventId","diagnosisCode","diagnosisType"],
     "cypher": "MATCH (e:Event {eventId:$eventId}) MATCH (d:Diagnosis {code:$diagnosisCode}) CREATE (e)-[:HAS_DIAGNOSIS {type:$diagnosisType}]->(d)",
+    "memgraph": "MATCH (e:Event {eventId:$eventId}) MATCH (d:Diagnosis {code:$diagnosisCode}) CREATE (e)-[:HAS_DIAGNOSIS {type:$diagnosisType}]->(d)",
     "gremlin": "g.V().hasLabel('Event').has('eventId', eventId).limit(1).as('e').V().hasLabel('Diagnosis').has('code', diagnosisCode).limit(1).as('d').addE('HAS_DIAGNOSIS').from('e').to('d').property('type', diagnosisType)"
   },
   {
@@ -46,6 +52,7 @@
     "category": "OLTP",
     "params": ["unitId","stateCode"],
     "cypher": "MATCH (s:State {stateCode:$stateCode}) MERGE (h:HealthcareUnit {unitId:$unitId}) ON CREATE SET h.state_code=$stateCode MERGE (h)-[:LOCATED_IN]->(s)",
+    "memgraph": "MATCH (s:State {stateCode:$stateCode}) MERGE (h:HealthcareUnit {unitId:$unitId}) ON CREATE SET h.state_code=$stateCode MERGE (h)-[:LOCATED_IN]->(s)",
     "gremlin": "g.V().hasLabel('State').has('stateCode', stateCode).fold().coalesce(unfold().as('s'), addV('State').property('stateCode', stateCode).as('s')).V().hasLabel('HealthcareUnit').has('unitId', unitId).fold().coalesce(unfold().as('h'), addV('HealthcareUnit').property('unitId', unitId).property('state_code', stateCode).as('h')).addE('LOCATED_IN').from('h').to('s')"
   },
   {
@@ -53,6 +60,7 @@
     "category": "OLTP",
     "params": ["patientId","newNationality"],
     "cypher": "MATCH (p:Patient {patientId:$patientId}) SET p.nationality=$newNationality RETURN p",
+    "memgraph": "MATCH (p:Patient {patientId:$patientId}) SET p.nationality=$newNationality RETURN p",
     "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).property('nationality', newNationality)"
   },
   {
@@ -60,70 +68,80 @@
     "category": "OLAP",
     "params": [],
     "cypher": "MATCH (p:Patient) RETURN p.gender AS gender, count(p) AS numberOfPatients ORDER BY numberOfPatients DESC",
-    "gremlin": "g.V().hasLabel('Patient').values('gender').groupCount().unfold().order().by(values, desc).project('gender','numberOfPatients').by(keys).by(values)"
+    "memgraph": "MATCH (p:Patient) RETURN p.gender AS gender, count(p) AS numberOfPatients ORDER BY numberOfPatients DESC",
+    "gremlin": "g.V().hasLabel('Patient').values('gender').groupCount().unfold().order().by(values, decr).project('gender','numberOfPatients').by(keys).by(values)"
   },
   {
     "name": "2.2 Admissions per Hospital (Year)",
     "category": "OLAP",
     "params": ["year"],
     "cypher": "MATCH (a:Admission)-[:PERFORMED_AT]->(h:HealthcareUnit) WHERE a.date STARTS WITH $year RETURN h.unitId AS hospital, count(a) AS numberOfAdmissions ORDER BY numberOfAdmissions DESC LIMIT 20",
-    "gremlin": "g.V().hasLabel('Event').has('eventType','Admission').has('eventDate', between(yearStart, yearEnd)).out('PERFORMED_AT').hasLabel('HealthcareUnit').values('unitId').groupCount().unfold().order().by(values, desc).limit(20).project('hospital','numberOfAdmissions').by(keys).by(values)"
+    "memgraph": "MATCH (a:Event {subtype:'Admission'})-[:PERFORMED_AT]->(h:HealthcareUnit) WHERE a.date STARTS WITH $year RETURN h.unitId AS hospital, count(a) AS numberOfAdmissions ORDER BY numberOfAdmissions DESC LIMIT 20",
+    "gremlin": "g.V().hasLabel('Event').has('eventType','Admission').out('PERFORMED_AT').hasLabel('HealthcareUnit').values('unitId').groupCount().unfold().order().by(values, decr).limit(20).project('hospital','numberOfAdmissions').by(keys).by(values)"
   },
   {
     "name": "2.3 Top Primary Diagnoses",
     "category": "OLAP",
     "params": [],
     "cypher": "MATCH (e:Event)-[r:HAS_DIAGNOSIS]->(d:Diagnosis) WHERE r.type='PRIMARY' RETURN d.code AS diagnosisCode, count(e) AS totalEvents ORDER BY totalEvents DESC LIMIT 25",
-    "gremlin": "g.V().hasLabel('Event').outE('HAS_DIAGNOSIS').has('type','PRIMARY').inV().hasLabel('Diagnosis').values('code').groupCount().unfold().order().by(values, desc).limit(25).project('diagnosisCode','totalEvents').by(keys).by(values)"
+    "memgraph": "MATCH (e:Event)-[r:HAS_DIAGNOSIS]->(d:Diagnosis) WHERE r.type='PRIMARY' RETURN d.code AS diagnosisCode, count(e) AS totalEvents ORDER BY totalEvents DESC LIMIT 25",
+    "gremlin": "g.V().hasLabel('Event').outE('HAS_DIAGNOSIS').has('type','PRIMARY').inV().hasLabel('Diagnosis').values('code').groupCount().unfold().order().by(values, decr).limit(25).project('diagnosisCode','totalEvents').by(keys).by(values)"
   },
   {
     "name": "G1 Patient Timeline (bounded)",
     "category": "GRAPH",
     "params": ["patientId","limit"],
-    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(e:Event) WITH e ORDER BY e.date ASC RETURN [label IN labels(e) WHERE label <> 'Event' | label][0] AS eventType, e.eventId AS eventId, e.date AS date LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).out('HAD_EVENT').hasLabel('Event').order().by('eventDate', asc).limit(limit).project('eventType','eventId','date').by(coalesce(values('eventType'), constant('Event'))).by(values('eventId')).by(values('eventDate'))"
+    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(e:Event) WITH e ORDER BY e.date ASC RETURN [label IN labels(e) WHERE label <> 'Event' | label][0] AS eventType, e.eventId AS eventId, e.date AS date LIMIT $limit",
+    "memgraph": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(e:Event) WITH e ORDER BY e.date ASC RETURN e.subtype AS eventType, e.eventId AS eventId, e.date AS date LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).out('HAD_EVENT').hasLabel('Event').order().by('date', incr).limit(limit).project('eventType','eventId','date').by(coalesce(values('eventType'), constant('Event'))).by(values('eventId')).by(values('date'))"
   },
   {
     "name": "G2 Similar Patients via Shared Primary Diagnoses",
     "category": "GRAPH",
     "params": ["patientId","k","limit"],
-    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(:Event)-[:HAS_DIAGNOSIS {type:'PRIMARY'}]->(d:Diagnosis) WITH p, d LIMIT toInteger(coalesce($k,20)) MATCH (d)<-[:HAS_DIAGNOSIS {type:'PRIMARY'}]-(:Event)<-[:HAD_EVENT]-(o:Patient) WHERE o <> p RETURN o.patientId AS similarPatient, count(*) AS shared ORDER BY shared DESC LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').out('HAD_EVENT').has('eventType', within('Admission','Procedure','Discharge')).outE('HAS_DIAGNOSIS').has('type','PRIMARY').inV().hasLabel('Diagnosis').dedup().limit(k).as('d').in('HAS_DIAGNOSIS').hasLabel('Event').in('HAD_EVENT').hasLabel('Patient').where(neq('p')).groupCount().by('patientId').order(local).by(values, desc).limit(limit).unfold().project('similarPatient','shared').by(keys).by(values)"
+    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(:Event)-[:HAS_DIAGNOSIS {type:'PRIMARY'}]->(d:Diagnosis) WITH p, d LIMIT $k MATCH (d)<-[:HAS_DIAGNOSIS {type:'PRIMARY'}]-(:Event)<-[:HAD_EVENT]-(o:Patient) WHERE o <> p RETURN o.patientId AS similarPatient, count(*) AS shared ORDER BY shared DESC LIMIT $limit",
+    "memgraph": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(:Event)-[:HAS_DIAGNOSIS {type:'PRIMARY'}]->(d:Diagnosis) WITH p, d LIMIT toInteger(coalesce($k,25)) MATCH (d)<-[:HAS_DIAGNOSIS {type:'PRIMARY'}]-(:Event)<-[:HAD_EVENT]-(o:Patient) WHERE o <> p RETURN o.patientId AS similarPatient, count(*) AS shared ORDER BY shared DESC LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').out('HAD_EVENT').outE('HAS_DIAGNOSIS').has('type','PRIMARY').inV().hasLabel('Diagnosis').dedup().limit(k).as('d').in('HAS_DIAGNOSIS').hasLabel('Event').in('HAD_EVENT').hasLabel('Patient').where(neq('p')).groupCount().by('patientId').order(local).by(values, decr).limit(limit).unfold().project('similarPatient','shared').by(keys).by(values)"
   },
   {
     "name": "G3 Unit -> Next Units by Same Patients",
     "category": "GRAPH",
     "params": ["unitId","limit"],
-    "cypher": "MATCH (u:HealthcareUnit {unitId:$unitId})<-[:PERFORMED_AT]-(a:Admission)<-[:HAD_EVENT]-(p:Patient) WITH DISTINCT p, a, u MATCH (p)-[:HAD_EVENT]->(b:Admission)-[:PERFORMED_AT]->(v:HealthcareUnit) WHERE b.date > a.date AND v <> u RETURN v.unitId AS toUnit, count(DISTINCT p) AS patients ORDER BY patients DESC LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('HealthcareUnit').has('unitId', unitId).as('u').in('PERFORMED_AT').has('eventType','Admission').in('HAD_EVENT').dedup().limit(1000).as('p').select('p').out('HAD_EVENT').has('eventType','Admission').as('b').out('PERFORMED_AT').hasLabel('HealthcareUnit').where(neq('u')).groupCount().by('unitId').order(local).by(values, desc).limit(limit).unfold().project('toUnit','patients').by(keys).by(values)"
+    "cypher": "MATCH (u:HealthcareUnit {unitId:$unitId})<-[:PERFORMED_AT]-(a:Admission)<-[:HAD_EVENT]-(p:Patient) WITH DISTINCT p, a, u MATCH (p)-[:HAD_EVENT]->(b:Admission)-[:PERFORMED_AT]->(v:HealthcareUnit) WHERE b.date > a.date AND v <> u RETURN v.unitId AS toUnit, count(DISTINCT p) AS patients ORDER BY patients DESC LIMIT $limit",
+    "memgraph": "MATCH (u:HealthcareUnit {unitId:$unitId})<-[:PERFORMED_AT]-(a:Event {subtype:'Admission'})<-[:HAD_EVENT]-(p:Patient) WITH DISTINCT p, a, u MATCH (p)-[:HAD_EVENT]->(b:Event {subtype:'Admission'})-[:PERFORMED_AT]->(v:HealthcareUnit) WHERE b.date > a.date AND v <> u RETURN v.unitId AS toUnit, count(DISTINCT p) AS patients ORDER BY patients DESC LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('HealthcareUnit').has('unitId', unitId).as('u').in('PERFORMED_AT').has('eventType','Admission').in('HAD_EVENT').dedup().limit(1000).as('p').select('p').out('HAD_EVENT').has('eventType','Admission').as('b').out('PERFORMED_AT').hasLabel('HealthcareUnit').where(neq('u')).groupCount().by('unitId').order(local).by(values, decr).limit(limit).unfold().project('toUnit','patients').by(keys).by(values)"
   },
   {
     "name": "G4 Diagnosis -> Frequent Procedure Types",
     "category": "GRAPH",
     "params": ["diagnosisCode","limit"],
-    "cypher": "MATCH (d:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(:Event)<-[:HAD_EVENT]-(p:Patient)-[:HAD_EVENT]->(e:Event:Procedure) WITH e, [lab IN labels(e) WHERE lab <> 'Event' AND lab <> 'Procedure'][0] AS procLabel RETURN coalesce(procLabel,'Procedure') AS procedureType, count(e) AS freq ORDER BY freq DESC LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('Diagnosis').has('code', diagnosisCode).in('HAS_DIAGNOSIS').hasLabel('Event').in('HAD_EVENT').hasLabel('Patient').out('HAD_EVENT').hasLabel('Event').has('eventType','Procedure').groupCount().by(coalesce(values('procedureType'), constant('Procedure'))).unfold().order().by(values, desc).limit(limit).project('procedureType','freq').by(keys).by(values)"
+    "cypher": "MATCH (d:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(:Event)<-[:HAD_EVENT]-(p:Patient)-[:HAD_EVENT]->(e:Event:Procedure) WITH e, [lab IN labels(e) WHERE lab <> 'Event' AND lab <> 'Procedure'][0] AS procLabel RETURN coalesce(procLabel,'Procedure') AS procedureType, count(e) AS freq ORDER BY freq DESC LIMIT $limit",
+    "memgraph": "MATCH (d:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(e:Event)<-[:HAD_EVENT]-(:Patient) WHERE e.subtype STARTS WITH 'Procedure;' RETURN e.subtype AS procedureType, count(e) AS freq ORDER BY freq DESC LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Diagnosis').has('code', diagnosisCode).in('HAS_DIAGNOSIS').hasLabel('Event').in('HAD_EVENT').hasLabel('Patient').out('HAD_EVENT').hasLabel('Event').has('eventType', startingWith('Procedure;')).groupCount().by('eventType').unfold().order().by(values, decr).limit(limit).project('procedureType','freq').by(keys).by(values)"
   },
   {
     "name": "G5 Patient Two-Hop Peers via Same Unit (same month)",
     "category": "GRAPH",
     "params": ["patientId","limit"],
-    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(a:Admission)-[:PERFORMED_AT]->(u:HealthcareUnit) WITH p, a, u, substring(a.date,0,6) AS ym MATCH (o:Patient)-[:HAD_EVENT]->(b:Admission)-[:PERFORMED_AT]->(u) WHERE o <> p AND substring(b.date,0,6)=ym RETURN o.patientId AS peer, count(*) AS coVisits ORDER BY coVisits DESC LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).as('p').out('HAD_EVENT').has('eventType','Admission').as('a').out('PERFORMED_AT').hasLabel('HealthcareUnit').as('u').select('u').in('PERFORMED_AT').has('eventType','Admission').filter(values('eventDate').map{it.get().toString().substring(0,6)}.is(eq(select('a').values('eventDate').map{it.get().toString().substring(0,6)}.next()))).in('HAD_EVENT').hasLabel('Patient').where(neq('p')).groupCount().by('patientId').order(local).by(values, desc).limit(limit).unfold().project('peer','coVisits').by(keys).by(values)"
+    "cypher": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(a:Admission)-[:PERFORMED_AT]->(u:HealthcareUnit) WITH p, a, u, substring(a.date,0,6) AS ym MATCH (o:Patient)-[:HAD_EVENT]->(b:Admission)-[:PERFORMED_AT]->(u) WHERE o <> p AND substring(b.date,0,6)=ym RETURN o.patientId AS peer, count(*) AS coVisits ORDER BY coVisits DESC LIMIT $limit",
+    "memgraph": "MATCH (p:Patient {patientId:$patientId})-[:HAD_EVENT]->(a:Event {subtype:'Admission'})-[:PERFORMED_AT]->(u:HealthcareUnit) WITH p, a, u, substring(a.date,0,6) AS ym MATCH (o:Patient)-[:HAD_EVENT]->(b:Event {subtype:'Admission'})-[:PERFORMED_AT]->(u) WHERE o <> p AND substring(b.date,0,6)=ym RETURN o.patientId AS peer, count(*) AS coVisits ORDER BY coVisits DESC LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).as('p').out('HAD_EVENT').has('eventType','Admission').as('a').out('PERFORMED_AT').hasLabel('HealthcareUnit').as('u').select('u').in('PERFORMED_AT').has('eventType','Admission').filter(values('date').map{it.get().toString().substring(0,6)}.is(eq(select('a').values('date').map{it.get().toString().substring(0,6)}.next()))).in('HAD_EVENT').hasLabel('Patient').where(neq('p')).groupCount().by('patientId').order(local).by(values, decr).limit(limit).unfold().project('peer','coVisits').by(keys).by(values)"
   },
   {
     "name": "G6 K-hop Ego Network (Patient)",
     "category": "GRAPH",
     "params": ["patientId","maxHops","limit"],
-    "cypher": "WITH $patientId AS pid MATCH (p:Patient {patientId:pid}) MATCH path=(p)-[:HAD_EVENT|PERFORMED_AT]-() WITH 1 AS hops, count(*) AS paths WHERE hops <= toInteger($maxHops) RETURN hops, paths UNION ALL WITH $patientId AS pid MATCH (p:Patient {patientId:pid}) MATCH path=(p)-[:HAD_EVENT|PERFORMED_AT*2]-() WITH 2 AS hops, count(*) AS paths WHERE hops <= toInteger($maxHops) RETURN hops, paths UNION ALL WITH $patientId AS pid MATCH (p:Patient {patientId:pid}) MATCH path=(p)-[:HAD_EVENT|PERFORMED_AT*3]-() WITH 3 AS hops, count(*) AS paths WHERE hops <= toInteger($maxHops) RETURN hops, paths UNION ALL WITH $patientId AS pid MATCH (p:Patient {patientId:pid}) MATCH path=(p)-[:HAD_EVENT|PERFORMED_AT*4]-() WITH 4 AS hops, count(*) AS paths WHERE hops <= toInteger($maxHops) RETURN hops, paths",
-   "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).repeat(out('HAD_EVENT','PERFORMED_AT')).times(maxHops).path().limit(limit).project('hops').by(count(local))"
+    "cypher": "MATCH (p:Patient {patientId:$patientId}) MATCH path = (p)-[:HAD_EVENT|PERFORMED_AT*1..3]-() WITH length(path) AS hops WHERE hops <= toInteger($maxHops) RETURN hops, count(*) AS paths ORDER BY hops LIMIT toInteger(coalesce($limit,25))",
+    "memgraph": "MATCH (p:Patient {patientId:$patientId}) MATCH path = (p)-[:HAD_EVENT|PERFORMED_AT*1..3]-() WITH length(path) AS hops WHERE hops <= toInteger($maxHops) RETURN hops, count(*) AS paths ORDER BY hops LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).repeat(out('HAD_EVENT','PERFORMED_AT')).times(maxHops).path().limit(limit).project('hops').by(count(local))"
   },
   {
     "name": "G7 Diagnosis Co-occurrence (anchored)",
     "category": "GRAPH",
     "params": ["diagnosisCode","limit"],
-    "cypher": "MATCH (d1:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(e:Event)-[:HAS_DIAGNOSIS]->(d2:Diagnosis) WHERE d1<>d2 RETURN d2.code AS coDiagnosis, count(e) AS coCount ORDER BY coCount DESC LIMIT toInteger(coalesce($limit,25))",
-    "gremlin": "g.V().hasLabel('Diagnosis').has('code', diagnosisCode).as('d1').in('HAS_DIAGNOSIS').hasLabel('Event').out('HAS_DIAGNOSIS').hasLabel('Diagnosis').where(neq('d1')).values('code').groupCount().unfold().order().by(values, desc).limit(limit).project('coDiagnosis','coCount').by(keys).by(values)"
+    "cypher": "MATCH (d1:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(e:Event)-[:HAS_DIAGNOSIS]->(d2:Diagnosis) WHERE d1<>d2 RETURN d2.code AS coDiagnosis, count(e) AS coCount ORDER BY coCount DESC LIMIT $limit",
+    "memgraph": "MATCH (d1:Diagnosis {code:$diagnosisCode})<-[:HAS_DIAGNOSIS]-(e:Event)-[:HAS_DIAGNOSIS]->(d2:Diagnosis) WHERE d1<>d2 RETURN d2.code AS coDiagnosis, count(e) AS coCount ORDER BY coCount DESC LIMIT toInteger(coalesce($limit,25))",
+    "gremlin": "g.V().hasLabel('Diagnosis').has('code', diagnosisCode).as('d1').in('HAS_DIAGNOSIS').hasLabel('Event').out('HAS_DIAGNOSIS').hasLabel('Diagnosis').where(neq('d1')).values('code').groupCount().unfold().order().by(values, decr).limit(limit).project('coDiagnosis','coCount').by(keys).by(values)"
   }
 ]
 
