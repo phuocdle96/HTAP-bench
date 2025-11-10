@@ -8,45 +8,36 @@ import java.time.YearMonth;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
- * Heartbeat writer + sampler for freshness measurement.
- *
- * - Writes tiny "heartbeat" Events at a fixed rate using SAME label/props the OLAP range uses.
- * - Samples the most recent visible heartbeat to compute:
- *      freshness = now_ms - ts_write_ms_of_latest_visible_heartbeat
- * - Prints effective config + inter-write/read deltas for verification.
- *
- * Neo4j:     (:Event:Heartbeat {date: LocalDate, subtype:'Heartbeat', ts_write_ms:long, seq:long})
- * Memgraph:  (:Event:Heartbeat {date: 'YYYYMMDD', subtype:'Heartbeat', ts_write_ms, seq})
- * JanusGraph: Event vertex with {eventType:'Heartbeat', eventDate: YYYYMMDD(long), ts_write_ms, seq}
+ * Heartbeat writer/sampler (freshness).
+ * Neo4j & Memgraph now use date as String "yyyyMMdd".
+ * Janus/Gremlin uses long yyyymmdd (eventDate).
  */
 public final class HeartbeatService implements AutoCloseable {
 
     public static final class Config {
         public final boolean enabled;
-        public final long    writeIntervalMs;
-        public final long    readIntervalMs;
+        public final long writeIntervalMs;
+        public final long readIntervalMs;
         public final YearMonth hbMonth;
         public final QueryGenerator.Engine engine;
 
         public Config(boolean enabled, long writeIntervalMs, long readIntervalMs,
                       YearMonth hbMonth, QueryGenerator.Engine engine) {
-            this.enabled        = enabled;
-            this.writeIntervalMs= writeIntervalMs;
+            this.enabled = enabled;
+            this.writeIntervalMs = writeIntervalMs;
             this.readIntervalMs = readIntervalMs;
-            this.hbMonth        = hbMonth;
-            this.engine         = engine;
+            this.hbMonth = hbMonth;
+            this.engine = engine;
         }
     }
 
     private final DatabaseClient db;
     private final Config cfg;
 
-    // Use platform threads for a scheduled pool (virtual threads are not ideal here)
     private final ScheduledExecutorService sched =
             Executors.newScheduledThreadPool(2, r -> {
                 Thread t = new Thread(r, "hb-sched-" + UUID.randomUUID());
@@ -58,19 +49,16 @@ public final class HeartbeatService implements AutoCloseable {
     private final List<FreshnessSample> samples = Collections.synchronizedList(new ArrayList<>());
     private volatile boolean running = false;
 
-    // window bounds as engine-typed values
-    private final Object startDateParam;
-    private final Object endDateParam;
+    private final Object startParam; // String yyyyMMdd (Neo4j/Memgraph) or long yyyymmdd (Janus)
+    private final Object endParam;
 
-    // verification helpers
     private volatile long lastWriteWall = -1L;
     private volatile long lastSampleWall = -1L;
     private final List<Long> writeDeltas = Collections.synchronizedList(new ArrayList<>());
     private final List<Long> readDeltas  = Collections.synchronizedList(new ArrayList<>());
 
-    // Per-run unique ID parts
-    private final String hbRunPrefix; // e.g. 20251106T083512123Z
-    private final String hbRunRand;   // short base36 token
+    private final String hbRunPrefix;
+    private final String hbRunRand;
 
     public HeartbeatService(DatabaseClient db, Config cfg) {
         this.db = db;
@@ -79,24 +67,19 @@ public final class HeartbeatService implements AutoCloseable {
         LocalDate start = LocalDate.of(cfg.hbMonth.getYear(), cfg.hbMonth.getMonth(), 1);
         LocalDate end   = start.plusMonths(1);
 
-        switch (cfg.engine) {
-            case JANUSGRAPH -> {
-                startDateParam = toYYYYMMDDLong(start);
-                endDateParam   = toYYYYMMDDLong(end);
-            }
-            case NEO4J, MEMGRAPH -> {
-                startDateParam = start;
-                endDateParam   = end;
-            }
-            default -> throw new IllegalArgumentException("Unknown engine: " + cfg.engine);
+        if (cfg.engine == QueryGenerator.Engine.JANUSGRAPH) {
+            startParam = toYYYYMMDDLong(start);
+            endParam   = toYYYYMMDDLong(end);
+        } else {
+            startParam = yyyymmdd(start);
+            endParam   = yyyymmdd(end);
         }
 
-        long runStartMs = System.currentTimeMillis();
-        hbRunPrefix = "%tY%<tm%<tdT%<tH%<tM%<tS%<tLZ".formatted(runStartMs); // 20251106T083512123Z
+        long runStart = System.currentTimeMillis();
+        hbRunPrefix = String.format("%tY%<tm%<tdT%<tH%<tM%<tS%<tLZ", runStart);
         hbRunRand   = Long.toString(ThreadLocalRandom.current().nextLong(1_000_000_000L), 36).toUpperCase();
     }
 
-    /** Start writer and sampler if enabled. */
     public void start() {
         if (!cfg.enabled) return;
         running = true;
@@ -108,7 +91,6 @@ public final class HeartbeatService implements AutoCloseable {
         sched.scheduleAtFixedRate(this::safeSampleFreshness, cfg.readIntervalMs, cfg.readIntervalMs, MILLISECONDS);
     }
 
-    /** Stop, flush, print percentiles + delta verification. */
     public void stopAndReport() {
         if (!cfg.enabled) return;
         running = false;
@@ -138,13 +120,13 @@ public final class HeartbeatService implements AutoCloseable {
         if (!readDeltas.isEmpty()) {
             long[] r = readDeltas.stream().mapToLong(Long::longValue).sorted().toArray();
             System.out.printf("[HB] read  Δms p50=%d p95=%d p99=%d (n=%d)%n",
-                    pct(r,50), pct(r,99), pct(r,99), r.length);
+                    pct(r,50), pct(r,95), pct(r,99), r.length);
         }
     }
 
     @Override public void close() { stopAndReport(); }
 
-    /* ========================= internals ========================= */
+    /* internals */
 
     private void safeWriteBeat() {
         try {
@@ -177,46 +159,24 @@ public final class HeartbeatService implements AutoCloseable {
     }
 
     private void writeBeat(long now) {
-        long idSeq = seq.incrementAndGet();
-        long ts = now;
+        long n = seq.incrementAndGet();
+        String id = "hb_" + hbRunPrefix + "_" + now + "_" + hbRunRand + "_" + n;
 
-        // time-based, run-unique ID to avoid cross-run collisions
-        String hbId = "hb_" + hbRunPrefix + "_" + now + "_" + hbRunRand + "_" + idSeq;
-
-        // choose a day inside HB month → falls within pre-bound window
-        LocalDate day = LocalDate.of(cfg.hbMonth.getYear(), cfg.hbMonth.getMonthValue(), 1 + (int)(idSeq % 28));
+        LocalDate day = LocalDate.of(cfg.hbMonth.getYear(), cfg.hbMonth.getMonthValue(), 1 + (int)(n % 28));
 
         switch (cfg.engine) {
-            case NEO4J -> {
-                String cypher =
-                        "CREATE (e:Event:Heartbeat {" +
-                                " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
-                Map<String,Object> p = Map.of("id", hbId, "date", day, "ts", ts, "seq", idSeq);
+            case NEO4J, MEMGRAPH -> {
+                String cypher = "CREATE (e:Event:Heartbeat {eventId:$id, date:$date, ts_write_ms:$ts, subtype:'Heartbeat', seq:$seq}) RETURN e";
+                Map<String,Object> p = Map.of("id", id, "date", yyyymmdd(day), "ts", now, "seq", n);
                 db.executeQuery(cypher, p);
             }
-
-            case MEMGRAPH -> {
-                String cypher =
-                        "CREATE (e:Event:Heartbeat {" +
-                                " eventId:$id, subtype:'Heartbeat', date:$date, ts_write_ms:$ts, seq:$seq}) RETURN e";
-                Map<String,Object> p = Map.of("id", hbId, "date", yyyymmddString(day), "ts", ts, "seq", idSeq);
-                db.executeQuery(cypher, p);
-            }
-
             case JANUSGRAPH -> {
-                String g =
-                        "addV('Event')" +
-                        ".property('eventId', id)" +
-                        ".property('eventType','Heartbeat')" +
-                        ".property('eventDate', evDate)" +
-                        ".property('ts_write_ms', ts)" +
-                        ".property('seq', seq)" +
-                        ".iterate()";
+                String g = "addV('Event').property('eventId', id).property('eventType','Heartbeat').property('eventDate', evDate).property('ts_write_ms', ts).property('seq', seq).iterate()";
                 Map<String,Object> b = new HashMap<>();
-                b.put("id", hbId);
+                b.put("id", id);
                 b.put("evDate", toYYYYMMDDLong(day));
-                b.put("ts", ts);
-                b.put("seq", idSeq);
+                b.put("ts", now);
+                b.put("seq", n);
                 db.executeQuery(g, b);
             }
         }
@@ -224,76 +184,45 @@ public final class HeartbeatService implements AutoCloseable {
 
     private Long readLatestWriteTimestamp() {
         switch (cfg.engine) {
-            case NEO4J -> {
-                // Use aggregation to avoid seq/ordering pitfalls
-                String cypher =
-                        "MATCH (e:Event:Heartbeat) " +
-                        "WHERE e.date >= $start AND e.date < $end " +
-                        "RETURN max(e.ts_write_ms) AS ts";
-                Map<String,Object> p = Map.of("start", startDateParam, "end", endDateParam);
-                List<Map<String,Object>> rows = db.executeQuery(cypher, p);
+            case NEO4J, MEMGRAPH -> {
+                String cypher = "MATCH (e:Event:Heartbeat) WHERE e.date >= $start AND e.date < $end RETURN max(e.ts_write_ms) AS ts";
+                List<Map<String,Object>> rows = db.executeQuery(cypher, Map.of("start", startParam, "end", endParam));
                 if (!rows.isEmpty()) {
-                    Object ts = rows.get(0).get("ts");
-                    return (ts instanceof Number n) ? n.longValue() : null;
-                }
-                return null;
-            }
-            case MEMGRAPH -> {
-                String cypher =
-                        "MATCH (e:Event:Heartbeat) " +
-                        "WHERE e.date >= $start AND e.date < $end " +
-                        "RETURN max(e.ts_write_ms) AS ts";
-                Map<String,Object> p = Map.of(
-                        "start", yyyymmddString((LocalDate) startDateParam),
-                        "end",   yyyymmddString((LocalDate) endDateParam)
-                );
-                List<Map<String,Object>> rows = db.executeQuery(cypher, p);
-                if (!rows.isEmpty()) {
-                    Object ts = rows.get(0).get("ts");
-                    return (ts instanceof Number n) ? n.longValue() : null;
-                }
-                return null;
-            }
-            case JANUSGRAPH -> {
-                // values('ts_write_ms').max() returns a scalar; our client wraps it as {value: ...}
-                String g =
-                        "g.V().hasLabel('Event')" +
-                        ".has('eventType','Heartbeat')" +
-                        ".has('eventDate', gte(startDate))" +
-                        ".has('eventDate', lt(endDate))" +
-                        ".values('ts_write_ms').max()";
-                Map<String,Object> b = Map.of("startDate", startDateParam, "endDate", endDateParam);
-                List<Map<String,Object>> rows = db.executeQuery(g, b);
-                if (!rows.isEmpty()) {
-                    Object v = rows.get(0).getOrDefault("value", null);
+                    Object v = rows.get(0).get("ts");
                     return (v instanceof Number n) ? n.longValue() : null;
                 }
                 return null;
             }
-            default -> throw new IllegalArgumentException("Unknown engine: " + cfg.engine);
+            case JANUSGRAPH -> {
+                String g = "g.V().hasLabel('Event').has('eventType','Heartbeat').has('eventDate', gte(start)).has('eventDate', lt(end)).values('ts_write_ms').max()";
+                List<Map<String,Object>> rows = db.executeQuery(g, Map.of("start", startParam, "end", endParam));
+                if (!rows.isEmpty()) {
+                    Object v = rows.get(0).get("value");
+                    return (v instanceof Number n) ? n.longValue() : null;
+                }
+                return null;
+            }
+            default -> throw new IllegalArgumentException("engine");
         }
     }
 
-    /* ========================= helpers ========================= */
-
     private static long toYYYYMMDDLong(LocalDate d) {
-        return d.getYear() * 10000L + d.getMonthValue() * 100L + d.getDayOfMonth();
+        return d.getYear()*10000L + d.getMonthValue()*100L + d.getDayOfMonth();
     }
 
-    private static String yyyymmddString(LocalDate d) {
-        return "%04d%02d%02d".formatted(d.getYear(), d.getMonthValue(), d.getDayOfMonth());
+    private static String yyyymmdd(LocalDate d) {
+        return String.format(Locale.ROOT, "%04d%02d%02d", d.getYear(), d.getMonthValue(), d.getDayOfMonth());
     }
 
     private static long pct(long[] sorted, int p) {
         if (sorted.length == 0) return 0;
         double rank = (p/100.0)*(sorted.length-1);
-        int lo = (int)Math.floor(rank);
-        int hi = (int)Math.ceil(rank);
+        int lo = (int)Math.floor(rank), hi = (int)Math.ceil(rank);
         if (lo == hi) return sorted[lo];
         double w = rank - lo;
-        return (long)Math.round(sorted[lo] * (1.0 - w) + sorted[hi] * w);
+        return Math.round(sorted[lo]*(1.0-w) + sorted[hi]*w);
     }
 
-    /** Small record to hold samples. */
     public record FreshnessSample(long wallClockMs, long freshnessMs, long seq) {}
 }
+
