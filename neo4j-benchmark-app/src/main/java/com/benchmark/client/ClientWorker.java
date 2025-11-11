@@ -20,6 +20,7 @@ public class ClientWorker implements Runnable {
     private final List<QueryResult> results;
 
     private static final ObjectMapper OM = new ObjectMapper();
+    private static final int MAX_RETRIES = 8;
 
     public ClientWorker(DatabaseClient db,
                         BlockingQueue<QueryTemplate.PreparedQuery> qPool,
@@ -72,19 +73,22 @@ public class ClientWorker implements Runnable {
                                 || msg.contains("already exists with label 'Event' and property 'eventId'")
                                 || msg.contains("ConstraintValidationFailed");
 
+                        // Treat Memgraph’s wording as transient too:
+                        boolean looksMemgraphConflict =
+                                msg.contains("Cannot resolve conflicting transactions");
+
                         boolean isTransientError =
-                                t instanceof org.neo4j.driver.exceptions.TransientException
+                                looksMemgraphConflict
+                                || (t instanceof org.neo4j.driver.exceptions.TransientException)
                                 || (t.getCause() instanceof org.neo4j.driver.exceptions.TransientException)
                                 || msg.contains("TransientError")
                                 || msg.contains("DeadlockDetected")
                                 || msg.contains("ServiceUnavailable");
 
-                        if ((duplicateId || isTransientError) && attempts < 4) {
-                            try {
-                                Thread.sleep(ThreadLocalRandom.current().nextLong(10, 50) * attempts);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                            }
+                        if ((duplicateId || isTransientError) && attempts < MAX_RETRIES) {
+                            // jittered exponential backoff (caps quickly)
+                            long sleepMs = Math.min(200L, (1L << Math.min(attempts, 10)) + ThreadLocalRandom.current().nextLong(5, 25));
+                            try { Thread.sleep(sleepMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                             continue; // retry
                         }
 
@@ -201,6 +205,9 @@ public class ClientWorker implements Runnable {
         if (uses.test("newAdmissionId")) {
             p.put("newAdmissionId", UUID.randomUUID().toString());
         }
+        if (uses.test("newEventId")) {
+            p.put("newEventId", java.util.UUID.randomUUID().toString());
+        }
 
         // Do NOT modify reference IDs: patientId, unitId, diagnosisCode, currentAdmissionId, etc.
         return p;
@@ -220,4 +227,5 @@ public class ClientWorker implements Runnable {
         }
     }
 }
+
 

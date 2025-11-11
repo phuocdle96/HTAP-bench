@@ -25,8 +25,8 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
         Config cfg = Config.builder()
                 .withConnectionTimeout(timeoutSeconds, SECONDS)
                 .withConnectionAcquisitionTimeout(timeoutSeconds, SECONDS)
-                .withMaxTransactionRetryTime(timeoutSeconds, SECONDS)
-                .withMaxConnectionPoolSize(400)
+                .withMaxTransactionRetryTime(timeoutSeconds, SECONDS)  // retry transient conflicts
+                .withMaxConnectionPoolSize(800)
                 .build();
 
         this.driver = GraphDatabase.driver(uri, auth, cfg);
@@ -45,13 +45,22 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public List<Map<String, Object>> executeQuery(String cypher, Map<String, Object> params, boolean readOnly) {
-        SessionConfig.Builder b = SessionConfig.builder().withDatabase(database)
-                .withDefaultAccessMode(readOnly ? AccessMode.READ : AccessMode.WRITE);
-        try (Session s = driver.session(b.build())) {
-            return (params == null || params.isEmpty())
-                    ? s.run(cypher).list(org.neo4j.driver.Record::asMap)
-                    : s.run(cypher, params).list(org.neo4j.driver.Record::asMap);
+        try (Session s = driver.session(SessionConfig.builder()
+                .withDatabase(database)
+                .withDefaultAccessMode(readOnly ? AccessMode.READ : AccessMode.WRITE)
+                .build())) {
+
+            if (readOnly) {
+                return s.executeRead(tx -> runTx(tx, cypher, params));
+            } else {
+                return s.executeWrite(tx -> runTx(tx, cypher, params));
+            }
         }
+    }
+
+    private static List<Map<String,Object>> runTx(TransactionContext tx, String cypher, Map<String,Object> params) {
+        Result res = (params == null || params.isEmpty()) ? tx.run(cypher) : tx.run(cypher, params);
+        return res.list(org.neo4j.driver.Record::asMap);
     }
 
     @Override
@@ -64,8 +73,8 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
                           "RETURN n.`" + idProp + "` AS id LIMIT $cap";
 
         try (Session s = driver.session(SessionConfig.forDatabase(database))) {
-            return s.run(cypher, Map.of("cap", 10_000))
-                    .list(r -> r.get("id").isNull() ? null : r.get("id").asString())
+            return s.executeRead(tx -> tx.run(cypher, Map.of("cap", 10_000))
+                    .list(r -> r.get("id").isNull() ? null : r.get("id").asString()))
                     .stream().filter(java.util.Objects::nonNull).toList();
         }
     }
@@ -75,3 +84,4 @@ public class Neo4jClient implements DatabaseClient, AutoCloseable {
         driver.close();
     }
 }
+

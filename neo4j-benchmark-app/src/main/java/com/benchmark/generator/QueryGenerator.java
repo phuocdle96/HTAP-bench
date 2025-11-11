@@ -13,8 +13,24 @@ import java.util.concurrent.ThreadLocalRandom;
 import static com.benchmark.generator.QueryLanguage.CYPHER;
 import static com.benchmark.generator.QueryLanguage.GREMLIN;
 
+/**
+ * Loads query templates from classpath: src/main/resources/queries.json
+ * and binds parameters using sampled IDs (with synthetic fallbacks).
+ *
+ * Engine selection:
+ *  - NEO4J      -> Template.cypher
+ *  - MEMGRAPH   -> Template.memgraph (if provided) else Template.cypher
+ *  - JANUSGRAPH -> Template.gremlin
+ *
+ * Dates:
+ *  - Neo4j & Memgraph use String "yyyyMMdd"
+ *  - JanusGraph uses long yyyymmdd
+ *
+ * Heartbeat (HB.*) templates are skipped here (HeartbeatService handles them).
+ */
 public class QueryGenerator {
 
+    /** Supported engines */
     public enum Engine { NEO4J, MEMGRAPH, JANUSGRAPH }
 
     private static final int MIN_YEAR = 2000;
@@ -23,9 +39,11 @@ public class QueryGenerator {
     private final DatabaseClient db;
     private final Engine engine;
 
-    private List<String> patientIds = List.of();
-    private List<String> unitIds    = List.of();
-    private List<String> diagCodes  = List.of();
+    /* Sample pools for param binding */
+    private List<String> patientIds         = List.of();
+    private List<String> unitIds            = List.of();
+    private List<String> diagCodes          = List.of();
+    private List<String> admissionEventIds  = List.of(); // NEW: spread 1.3 writes across many admissions
 
     public QueryGenerator(DatabaseClient db, Engine engine) {
         this.db = db;
@@ -33,6 +51,7 @@ public class QueryGenerator {
         loadSamples();
     }
 
+    /** Build query pools per category from queries.json */
     public Map<String, List<QueryTemplate.PreparedQuery>> prepareAllQueries() {
         List<Template> templates = readTemplatesFromClasspath();
         Map<String, List<QueryTemplate.PreparedQuery>> out = new HashMap<>();
@@ -43,6 +62,7 @@ public class QueryGenerator {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         for (Template t : templates) {
+            // Skip heartbeat templates
             if (t.name != null && t.name.startsWith("HB.")) continue;
 
             String cat = (t.category == null) ? "OLTP" : t.category.toUpperCase(Locale.ROOT);
@@ -65,11 +85,13 @@ public class QueryGenerator {
         return out;
     }
 
+    /* ============================ helpers ============================ */
+
     private String chooseTextForEngine(Template t) {
         return switch (engine) {
-            case NEO4J     -> t.cypher;
-            case MEMGRAPH  -> (t.memgraph != null && !t.memgraph.isBlank()) ? t.memgraph : t.cypher;
-            case JANUSGRAPH-> t.gremlin;
+            case NEO4J      -> t.cypher;
+            case MEMGRAPH   -> (t.memgraph != null && !t.memgraph.isBlank()) ? t.memgraph : t.cypher;
+            case JANUSGRAPH -> t.gremlin;
         };
     }
 
@@ -78,7 +100,8 @@ public class QueryGenerator {
 
         Map<String,Object> p = new HashMap<>();
 
-        final YearMonth ym   = randomYearMonth(rnd);
+        // One month window per query instance
+        final YearMonth ym      = randomYearMonth(rnd);
         final LocalDate startLD = LocalDate.of(ym.getYear(), ym.getMonth(), 1);
         final LocalDate endLD   = startLD.plusMonths(1);
 
@@ -87,13 +110,16 @@ public class QueryGenerator {
 
         for (String n : names) {
             switch (n) {
-                // IDs from DB samples
-                case "patientId"     -> p.put("patientId", pick(patientIds, rnd));
-                case "unitId"        -> p.put("unitId", pick(unitIds, rnd));
-                case "diagnosisCode" -> p.put("diagnosisCode", pick(diagCodes, rnd));
-                case "eventId"       -> p.put("eventId", UUID.randomUUID().toString());
+                // IDs from DB samples or synthetic
+                case "patientId"          -> p.put("patientId", pick(patientIds, rnd));
+                case "unitId"             -> p.put("unitId", pick(unitIds, rnd));
+                case "diagnosisCode"      -> p.put("diagnosisCode", pick(diagCodes, rnd));
+                case "admissionEventId"   -> p.put("admissionEventId", pick(admissionEventIds, rnd));
+                case "eventId"            -> p.put("eventId", UUID.randomUUID().toString()); // generic fallback
+                case "newEventId"         -> p.put("newEventId", UUID.randomUUID().toString()); // create-time IDs
+		case "id"            	  -> p.put("id", java.util.UUID.randomUUID().toString());
 
-                // dates
+                // Dates
                 case "admissionDate" -> {
                     LocalDate d = randomDayInMonth(ym, rnd);
                     p.put("admissionDate", engine == Engine.JANUSGRAPH ? toYYYYMMDDLong(d) : yyyymmdd(d));
@@ -110,13 +136,13 @@ public class QueryGenerator {
                 case "endDate"   -> p.put("endDate",   endForEngine);
 
                 // bounded integers
-                case "limit"    -> p.put("limit", rnd.nextInt(10, 51));
-                case "k"        -> p.put("k", rnd.nextInt(5, 51));
-                case "maxHops"  -> p.put("maxHops", rnd.nextInt(1, 4)); // capped at 3 for Cypher pattern
+                case "limit"      -> p.put("limit", rnd.nextInt(10, 51));
+                case "k"          -> p.put("k", rnd.nextInt(5, 51));
+                case "maxHops"    -> p.put("maxHops", rnd.nextInt(1, 4)); // bounded for Cypher pattern
                 case "windowDays" -> p.put("windowDays", rnd.nextInt(7, 31));
                 case "age"        -> p.put("age", rnd.nextInt(0, 101));
 
-                // strings w/ small domain
+                // small-domain strings
                 case "gender"         -> p.put("gender", rnd.nextBoolean() ? "M" : "F");
                 case "nationality"    -> p.put("nationality", String.format(Locale.ROOT, "%03d", rnd.nextInt(1, 201)));
                 case "education"      -> p.put("education", List.of("NONE","HS","COLLEGE","GRAD").get(rnd.nextInt(4)));
@@ -138,13 +164,18 @@ public class QueryGenerator {
 
     private void loadSamples() {
         try {
-            patientIds = db.fetchSampleIds("Patient",        "patientId");
-            unitIds    = db.fetchSampleIds("HealthcareUnit", "unitId");
-            diagCodes  = db.fetchSampleIds("Diagnosis",      "code");
+            patientIds        = db.fetchSampleIds("Patient", "patientId");
+            unitIds           = db.fetchSampleIds("HealthcareUnit", "unitId");
+            diagCodes         = db.fetchSampleIds("Diagnosis", "code");
+            // Engine-neutral request; Memgraph client maps "Event:Admission" → (Event {subtype:'Admission'})
+            admissionEventIds = db.fetchSampleIds("Event:Admission", "eventId");
         } catch (Exception ignore) {}
-        if (patientIds == null || patientIds.isEmpty()) patientIds = synthetic("P%08d",  50_000);
-        if (unitIds    == null || unitIds.isEmpty())    unitIds    = synthetic("U%05d",   1_000);
-        if (diagCodes  == null || diagCodes.isEmpty())  diagCodes  = synthetic("D%05d",   5_000);
+
+        if (patientIds == null || patientIds.isEmpty())        patientIds = synthetic("P%08d", 50_000);
+        if (unitIds == null || unitIds.isEmpty())              unitIds    = synthetic("U%05d", 1_000);
+        if (diagCodes == null || diagCodes.isEmpty())          diagCodes  = synthetic("D%05d", 5_000);
+        if (admissionEventIds == null || admissionEventIds.isEmpty())
+            admissionEventIds = synthetic("A%012d", 200_000);
     }
 
     private static List<String> synthetic(String fmt, int n) {
@@ -189,12 +220,13 @@ public class QueryGenerator {
         return String.format(Locale.ROOT, "%04d%02d%02d", d.getYear(), d.getMonthValue(), d.getDayOfMonth());
     }
 
+    /* DTO for queries.json */
     public static class Template {
         public String name;
         public String category;
         public List<String> params;
         public String cypher;
-        public String memgraph;  // <— NEW: Memgraph-specific Cypher
+        public String memgraph; // Memgraph-specific Cypher
         public String gremlin;
 
         @Override public String toString() {

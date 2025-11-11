@@ -24,14 +24,6 @@
     "gremlin": "g.V().hasLabel('Patient').has('patientId', patientId).limit(1).as('p').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').V().hasLabel('Diagnosis').has('code', diagnosisCode).limit(1).as('d').addV('Event').property('eventId', eventId).property('eventType','Admission').property('date', admissionDate).property('specialty', specialty).as('a').addE('PERFORMED_AT').from('a').to('h').addE('HAD_EVENT').from('p').to('a').addE('HAS_DIAGNOSIS').from('a').to('d').property('type','PRIMARY')"
   },
   {
-    "name": "1.3 Add Procedure to Admission (Chemotherapy)",
-    "category": "OLTP",
-    "params": ["eventId","chemoDate","schema","unitId"],
-    "cypher": "MATCH (adm:Admission {eventId:$eventId}) MATCH (h:HealthcareUnit {unitId:$unitId}) CREATE (c:Event:Procedure:Chemotherapy {eventId: randomUUID(), date:$chemoDate, schema_1:$schema}) CREATE (adm)-[:INCLUDED_PROCEDURE]->(c) CREATE (c)-[:PERFORMED_AT]->(h)",
-    "memgraph": "MATCH (adm:Event {subtype:'Admission', eventId:$eventId}) MATCH (h:HealthcareUnit {unitId:$unitId}) CREATE (c:Event {subtype:'Procedure;Chemotherapy', eventId: randomUUID(), date:$chemoDate, schema_1:$schema}) CREATE (adm)-[:INCLUDED_PROCEDURE]->(c) CREATE (c)-[:PERFORMED_AT]->(h)",
-    "gremlin": "g.V().hasLabel('Event').has('eventType','Admission').has('eventId', eventId).limit(1).as('a').V().hasLabel('HealthcareUnit').has('unitId', unitId).limit(1).as('h').addV('Event').property('eventId', UUID.randomUUID().toString()).property('eventType','Procedure;Chemotherapy').property('date', chemoDate).property('schema_1', schema).as('c').addE('INCLUDED_PROCEDURE').from('a').to('c').addE('PERFORMED_AT').from('c').to('h')"
-  },
-  {
     "name": "1.4 Patient Discharge",
     "category": "OLTP",
     "params": ["patientId","eventId","dischargeDate","deathIndicator"],

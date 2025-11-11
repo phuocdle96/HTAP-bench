@@ -8,6 +8,8 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
+
 /**
  * Memgraph implementation backed by Neo4j Bolt driver.
  *
@@ -34,16 +36,23 @@ public class MemgraphClient implements DatabaseClient, AutoCloseable {
         this.writerUri = writerUri;
         this.user = (user == null ? "" : user);
         this.password = (password == null ? "" : password);
-        this.readUris = (readUris == null ? List.of() : readUris.stream()
-                .filter(s -> s != null && !s.isBlank()).collect(Collectors.toList()));
+        this.readUris = (readUris == null) ? List.of()
+                : readUris.stream().filter(s -> s != null && !s.isBlank()).collect(Collectors.toList());
     }
 
     @Override
     public void connect() {
         AuthToken auth = AuthTokens.basic(user, password);
-        this.writer = GraphDatabase.driver(writerUri, auth);
+        Config cfg = Config.builder()
+                .withConnectionTimeout(30, SECONDS)
+                .withConnectionAcquisitionTimeout(30, SECONDS)
+                .withMaxTransactionRetryTime(30, SECONDS)   // driver-level retry for TransientException
+                .withMaxConnectionPoolSize(800)
+                .build();
+
+        this.writer = GraphDatabase.driver(writerUri, auth, cfg);
         this.readers = readUris.stream()
-                .map(uri -> GraphDatabase.driver(uri, auth))
+                .map(uri -> GraphDatabase.driver(uri, auth, cfg))
                 .collect(Collectors.toList());
     }
 
@@ -55,14 +64,22 @@ public class MemgraphClient implements DatabaseClient, AutoCloseable {
     @Override
     public List<Map<String, Object>> executeQuery(String cypher, Map<String, Object> params, boolean readOnly) {
         Driver d = pickDriver(readOnly);
-        AccessMode mode = readOnly ? AccessMode.READ : AccessMode.WRITE;
 
         try (Session s = d.session(SessionConfig.builder()
-                .withDefaultAccessMode(mode)
+                .withDefaultAccessMode(readOnly ? AccessMode.READ : AccessMode.WRITE)
                 .build())) {
-            Result res = (params == null || params.isEmpty()) ? s.run(cypher) : s.run(cypher, params);
-            return res.list(org.neo4j.driver.Record::asMap);
+
+            if (readOnly) {
+                return s.executeRead(tx -> runTx(tx, cypher, params));
+            } else {
+                return s.executeWrite(tx -> runTx(tx, cypher, params)); // retryable on conflicts
+            }
         }
+    }
+
+    private static List<Map<String,Object>> runTx(TransactionContext tx, String cypher, Map<String,Object> params) {
+        Result res = (params == null || params.isEmpty()) ? tx.run(cypher) : tx.run(cypher, params);
+        return res.list(org.neo4j.driver.Record::asMap);
     }
 
     private Driver pickDriver(boolean readOnly) {
@@ -82,8 +99,8 @@ public class MemgraphClient implements DatabaseClient, AutoCloseable {
         try (Session s = d.session(SessionConfig.builder()
                 .withDefaultAccessMode(AccessMode.READ)
                 .build())) {
-            return s.run(cypher, Map.of("cap", 100_000))
-                    .list(r -> r.get("id").isNull() ? null : r.get("id").asString())
+            return s.executeRead(tx -> tx.run(cypher, Map.of("cap", 100_000))
+                    .list(r -> r.get("id").isNull() ? null : r.get("id").asString()))
                     .stream().filter(Objects::nonNull).toList();
         }
     }
@@ -94,3 +111,4 @@ public class MemgraphClient implements DatabaseClient, AutoCloseable {
         if (readers != null) readers.forEach(Driver::close);
     }
 }
+
