@@ -71,9 +71,10 @@ public class ClientWorker implements Runnable {
                         boolean duplicateId =
                                 msg.contains("already exists with label `Event` and property `eventId`")
                                 || msg.contains("already exists with label 'Event' and property 'eventId'")
-                                || msg.contains("ConstraintValidationFailed");
+                                || msg.contains("ConstraintValidationFailed")
+                                || msg.contains("violates a uniqueness constraint"); // JanusGraph
 
-                        // Treat Memgraph’s wording as transient too:
+                        // Treat Memgraph-ish wording as transient too:
                         boolean looksMemgraphConflict =
                                 msg.contains("Cannot resolve conflicting transactions");
 
@@ -83,13 +84,15 @@ public class ClientWorker implements Runnable {
                                 || (t.getCause() instanceof org.neo4j.driver.exceptions.TransientException)
                                 || msg.contains("TransientError")
                                 || msg.contains("DeadlockDetected")
-                                || msg.contains("ServiceUnavailable");
+                                || msg.contains("ServiceUnavailable")
+                                || msg.contains("No node was available to execute the query"); // Janus/Cassandra busy
 
                         if ((duplicateId || isTransientError) && attempts < MAX_RETRIES) {
-                            // jittered exponential backoff (caps quickly)
-                            long sleepMs = Math.min(200L, (1L << Math.min(attempts, 10)) + ThreadLocalRandom.current().nextLong(5, 25));
+                            long sleepMs = Math.min(200L, (1L << Math.min(attempts, 10))
+                                    + ThreadLocalRandom.current().nextLong(5, 25));
                             try { Thread.sleep(sleepMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-                            continue; // retry
+                            // On retry we will re-run ensureUniqueIds which will mint fresh IDs.
+                            continue;
                         }
 
                         System.err.printf(
@@ -122,7 +125,6 @@ public class ClientWorker implements Runnable {
 
         Map<String, Object> p = new HashMap<>(in);
 
-        // Names that must be integers in Cypher (LIMIT/SKIP, hop counts, etc.)
         List<String> intNames = Arrays.asList(
                 "limit", "skip", "offset", "topN", "topK", "k", "hops", "degree",
                 "minCount", "maxCount", "numSamples", "take", "sample"
@@ -133,9 +135,6 @@ public class ClientWorker implements Runnable {
                 p.put(name, coerceToInt(p.get(name), defaultFor(name)));
             }
         }
-
-        // If your queries use different param labels, add them here or derive from the query text.
-
         return p;
     }
 
@@ -164,54 +163,53 @@ public class ClientWorker implements Runnable {
             if (v instanceof Number) return ((Number) v).intValue();
             if (v instanceof String) {
                 String s = ((String) v).trim();
-                // Fast path: digits only
                 if (s.matches("^-?\\d+$")) return Integer.parseInt(s);
-                // Try to peel leading non-digits like "X12345"
                 String digits = s.replaceAll(".*?(-?\\d+).*", "$1");
                 if (digits.matches("^-?\\d+$")) return Integer.parseInt(digits);
             }
-        } catch (Exception ignore) { /* fallthrough */ }
+        } catch (Exception ignore) { }
         return defVal;
     }
 
-    /** Make per-execution UUIDs for CREATE-time IDs so we don’t collide when reusing templates. */
+    /**
+     * Make per-execution UUIDs for CREATE/ADDV/ADDE so we don’t collide when reusing templates.
+     * Works for both Cypher (CREATE/MERGE) and Gremlin (addV/addE).
+     */
     private static Map<String,Object> ensureUniqueIds(String query, Map<String,Object> in, boolean isOLTP) {
         if (!isOLTP || in == null || in.isEmpty()) return in;
 
-        String q = (query == null ? "" : query).toUpperCase(Locale.ROOT);
-        boolean hasCreate = q.contains("CREATE ");
-        if (!hasCreate) return in;
-
         Map<String,Object> p = new HashMap<>(in);
+        String q = (query == null ? "" : query).toLowerCase(Locale.ROOT);
 
-        java.util.function.Predicate<String> uses = param ->
-                q.contains("$" + param.toUpperCase(Locale.ROOT));
+        // Detect creates in BOTH languages
+        boolean createsInCypher  = q.contains(" create ") || q.contains(" merge ");
+        boolean createsEventGremlin =
+                q.contains("addv('event'") || q.contains("addv(\"event\"");
+        boolean createsGremlin   =
+                q.contains("addv(") || q.contains("adde("); // broad safety net
 
-        if (uses.test("eventId")) {
+        // Always refresh per execution if it looks like a create that could use the ID
+        if (p.containsKey("eventId") && (createsInCypher || createsEventGremlin || createsGremlin)) {
             p.put("eventId", UUID.randomUUID().toString());
         }
-        if (uses.test("admissionId") && q.contains(":ADMISSION")) {
+        if (p.containsKey("newEventId")) {
+            p.put("newEventId", UUID.randomUUID().toString());
+        }
+        if (p.containsKey("admissionId") && createsGremlin) {
             p.put("admissionId", UUID.randomUUID().toString());
         }
-        if (uses.test("dischargeId") && q.contains(":DISCHARGE")) {
+        if (p.containsKey("dischargeId") && createsGremlin) {
             p.put("dischargeId", UUID.randomUUID().toString());
         }
-        if (uses.test("procedureId")) {
+        if (p.containsKey("procedureId") && createsGremlin) {
             p.put("procedureId", UUID.randomUUID().toString());
         }
-        if (uses.test("chemoId")) {
+        if (p.containsKey("chemoId") && createsGremlin) {
             p.put("chemoId", UUID.randomUUID().toString());
         }
-        if (uses.test("newAdmissionId")) {
-            p.put("newAdmissionId", UUID.randomUUID().toString());
-        }
-        if (uses.test("newEventId")) {
-            p.put("newEventId", java.util.UUID.randomUUID().toString());
-        }
-
-        // Do NOT modify reference IDs: patientId, unitId, diagnosisCode, currentAdmissionId, etc.
         return p;
     }
+
 
     private static String truncate(String s, int max) {
         if (s == null || s.length() <= max) return s;
@@ -227,5 +225,4 @@ public class ClientWorker implements Runnable {
         }
     }
 }
-
 

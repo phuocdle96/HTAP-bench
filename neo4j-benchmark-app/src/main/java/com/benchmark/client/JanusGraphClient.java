@@ -9,15 +9,7 @@ import org.apache.tinkerpop.gremlin.driver.ResultSet;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
-/**
- * JanusGraph/Gremlin client with optional read-hosts for OLAP/GRAPH load balancing.
- *
- * Usage (via BenchmarkRunner):
- *   --uri gremlin://writer-host:8182
- *   --janus-read-hosts reader1:8182,reader2:8182
- */
 public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
     private final String writeHost;
@@ -58,7 +50,7 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public void connect() {
-        // build writer cluster
+        // Writer cluster (use default serializers; avoid custom Serializer references)
         Cluster.Builder wb = Cluster.build()
                 .addContactPoint(writeHost)
                 .port(writePort)
@@ -69,7 +61,7 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         this.writeCluster = wb.create();
         this.writeClient  = writeCluster.connect();
 
-        // build read cluster if provided; else reuse writer
+        // Reader cluster (optional)
         if (!readHosts.isEmpty()) {
             Cluster.Builder rb = Cluster.build()
                     .minConnectionPoolSize(this.minPoolSize)
@@ -124,9 +116,23 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
 
     @Override
     public List<String> fetchSampleIds(String label, String idProperty) {
-        // Prefer using writer; sampling is light and avoids extra client pick logic.
-        String script = "g.V().has(idProp).hasLabel(label).limit(cap).values(idProp)";
-        Map<String, Object> bindings = Map.of("label", label, "idProp", idProperty, "cap", 1_000);
+        // Support synthetic label form "Event:Admission"
+        String script;
+        Map<String, Object> bindings;
+
+        if (label != null && label.contains(":")) {
+            String[] parts = label.split(":", 2);
+            String base = parts[0];
+            String sub  = parts[1];
+            String prop = "subtype";
+            if ("Event".equalsIgnoreCase(base)) prop = "eventType";
+
+            script = "g.V().hasLabel(base).has(prop, sub).has(idProp).limit(cap).values(idProp)";
+            bindings = Map.of("base", base, "prop", prop, "sub", sub, "idProp", idProperty, "cap", 1_000);
+        } else {
+            script = "g.V().has(idProp).hasLabel(label).limit(cap).values(idProp)";
+            bindings = Map.of("label", label, "idProp", idProperty, "cap", 1_000);
+        }
 
         List<Map<String, Object>> rows = submit(writeClient, script, bindings);
         List<String> out = new ArrayList<>(rows.size());
@@ -174,3 +180,4 @@ public class JanusGraphClient implements DatabaseClient, AutoCloseable {
         if (readCluster  != null && readCluster != writeCluster) readCluster.close();
     }
 }
+

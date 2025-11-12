@@ -13,7 +13,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * Heartbeat writer/sampler (freshness).
- * Neo4j & Memgraph now use date as String "yyyyMMdd".
+ * Neo4j & Memgraph use date as String "yyyyMMdd".
  * Janus/Gremlin uses long yyyymmdd (eventDate).
  */
 public final class HeartbeatService implements AutoCloseable {
@@ -171,9 +171,9 @@ public final class HeartbeatService implements AutoCloseable {
                 db.executeQuery(cypher, p);
             }
             case JANUSGRAPH -> {
-                String g = "addV('Event').property('eventId', id).property('eventType','Heartbeat').property('eventDate', evDate).property('ts_write_ms', ts).property('seq', seq).iterate()";
+                String g = "g.addV('Event').property('eventId', eventId).property('eventType','Heartbeat').property('eventDate', evDate).property('ts_write_ms', ts).property('seq', seq).iterate()";
                 Map<String,Object> b = new HashMap<>();
-                b.put("id", id);
+                b.put("eventId", id);
                 b.put("evDate", toYYYYMMDDLong(day));
                 b.put("ts", now);
                 b.put("seq", n);

@@ -27,6 +27,7 @@ import static com.benchmark.generator.QueryLanguage.GREMLIN;
  *  - JanusGraph uses long yyyymmdd
  *
  * Heartbeat (HB.*) templates are skipped here (HeartbeatService handles them).
+ * NOTE: Gremlin reserves parameter name "id" at the protocol layer. Do not use it in queries.json.
  */
 public class QueryGenerator {
 
@@ -43,7 +44,7 @@ public class QueryGenerator {
     private List<String> patientIds         = List.of();
     private List<String> unitIds            = List.of();
     private List<String> diagCodes          = List.of();
-    private List<String> admissionEventIds  = List.of(); // NEW: spread 1.3 writes across many admissions
+    private List<String> admissionEventIds  = List.of(); // spread writes across many admissions
 
     public QueryGenerator(DatabaseClient db, Engine engine) {
         this.db = db;
@@ -62,8 +63,7 @@ public class QueryGenerator {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         for (Template t : templates) {
-            // Skip heartbeat templates
-            if (t.name != null && t.name.startsWith("HB.")) continue;
+            if (t.name != null && t.name.startsWith("HB.")) continue; // Heartbeat handled elsewhere
 
             String cat = (t.category == null) ? "OLTP" : t.category.toUpperCase(Locale.ROOT);
             String text = chooseTextForEngine(t);
@@ -115,9 +115,9 @@ public class QueryGenerator {
                 case "unitId"             -> p.put("unitId", pick(unitIds, rnd));
                 case "diagnosisCode"      -> p.put("diagnosisCode", pick(diagCodes, rnd));
                 case "admissionEventId"   -> p.put("admissionEventId", pick(admissionEventIds, rnd));
-                case "eventId"            -> p.put("eventId", UUID.randomUUID().toString()); // generic fallback
-                case "newEventId"         -> p.put("newEventId", UUID.randomUUID().toString()); // create-time IDs
-		case "id"            	  -> p.put("id", java.util.UUID.randomUUID().toString());
+                case "eventId"            -> p.put("eventId", UUID.randomUUID().toString()); // fallback for CREATE
+                case "newEventId"         -> p.put("newEventId", UUID.randomUUID().toString());
+                // IMPORTANT: Do NOT use "id" as a binding; Gremlin treats it as reserved.
 
                 // Dates
                 case "admissionDate" -> {
@@ -138,7 +138,7 @@ public class QueryGenerator {
                 // bounded integers
                 case "limit"      -> p.put("limit", rnd.nextInt(10, 51));
                 case "k"          -> p.put("k", rnd.nextInt(5, 51));
-                case "maxHops"    -> p.put("maxHops", rnd.nextInt(1, 4)); // bounded for Cypher pattern
+                case "maxHops"    -> p.put("maxHops", rnd.nextInt(1, 4));
                 case "windowDays" -> p.put("windowDays", rnd.nextInt(7, 31));
                 case "age"        -> p.put("age", rnd.nextInt(0, 101));
 
@@ -167,7 +167,7 @@ public class QueryGenerator {
             patientIds        = db.fetchSampleIds("Patient", "patientId");
             unitIds           = db.fetchSampleIds("HealthcareUnit", "unitId");
             diagCodes         = db.fetchSampleIds("Diagnosis", "code");
-            // Engine-neutral request; Memgraph client maps "Event:Admission" → (Event {subtype:'Admission'})
+            // For JanusGraph, "Event:Admission" is supported in JanusGraphClient.fetchSampleIds
             admissionEventIds = db.fetchSampleIds("Event:Admission", "eventId");
         } catch (Exception ignore) {}
 
