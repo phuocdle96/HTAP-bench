@@ -1,0 +1,3 @@
+timestamp,category,workers,total_queries,throughput_ops,avg_latency_ms,median_latency_ms,p95_latency_ms,p99_latency_ms,min_latency_ms,max_latency_ms
+2025-10-22T20:46:10.457589947Z,OLTP,8,58714,1957.13,0.00,0.00,0.00,0.00,0.00,17.00
+2025-10-22T20:46:10.457913492Z,OVERALL,10,58714,1957.13,,,,,,

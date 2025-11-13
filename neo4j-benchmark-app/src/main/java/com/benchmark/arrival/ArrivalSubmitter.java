@@ -11,24 +11,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.LockSupport;
 
-/**
- * Generates Poisson arrivals (open-loop).  After each exponential gap it
- * submits ONE single-shot ClientWorker to a shared virtual-thread pool.
- *
- * time handling:
- *   • endMillisWall — absolute wall clock deadline (ms since epoch) for workers
- *   • endNanos      — monotonic deadline for this generator’s while-loop
- */
+/** Poisson arrivals (open-loop). */
 public final class ArrivalSubmitter implements Runnable {
 
-    private final double                      lambda;
-    private final ExecutorService             workerPool;
-    private final DatabaseClient              db;
+    private final double lambda;
+    private final ExecutorService workerPool;
+    private final DatabaseClient db;
     private final BlockingQueue<QueryTemplate.PreparedQuery> qPool;
-    private final String                      category;
+    private final String category;
 
-    private final long endMillisWall;   // wall-clock deadline for workers
-    private final long endNanos;        // same moment, in nanoTime domain
+    private final long endMillisWall;
+    private final long endNanos;
 
     private final List<QueryResult> collector;
 
@@ -37,23 +30,20 @@ public final class ArrivalSubmitter implements Runnable {
                             DatabaseClient db,
                             BlockingQueue<QueryTemplate.PreparedQuery> qPool,
                             String category,
-                            long endMillisWall,                     // epoch-ms
+                            long endMillisWall,
                             List<QueryResult> collector) {
 
-        this.lambda       = lambda;
-        this.workerPool   = workerPool;
-        this.db           = db;
-        this.qPool        = qPool;
-        this.category     = category;
-
+        this.lambda = lambda;
+        this.workerPool = workerPool;
+        this.db = db;
+        this.qPool = qPool;
+        this.category = category;
         this.endMillisWall = endMillisWall;
-        this.endNanos      = System.nanoTime() +
-                             (endMillisWall - System.currentTimeMillis()) * 1_000_000L;
+        this.endNanos = System.nanoTime()
+                + (endMillisWall - System.currentTimeMillis()) * 1_000_000L;
+        this.collector = collector;
 
-        this.collector    = collector;
-
-        System.out.printf("Submitter %s will run for %.2f s%n",
-                          category, (endNanos - System.nanoTime()) / 1e9);
+        // NOTE: removed noisy per-shard "will run for ..." logs
     }
 
     @Override
@@ -61,18 +51,11 @@ public final class ArrivalSubmitter implements Runnable {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         while (System.nanoTime() < endNanos) {
-
-            /* single-shot worker */
             workerPool.submit(new ClientWorker(
-                    db,
-                    qPool,
-                    category,
-                    endMillisWall,          // correct clock for worker loop
-                    /* warm */ false,
-                    /* singleShot */ true,
+                    db, qPool, category, endMillisWall,
+                    /*warm*/ false, /*singleShot*/ true,
                     collector));
 
-            /* exponential gap: gap = −ln(U) / λ   (seconds) */
             double gapSec  = -Math.log1p(-rnd.nextDouble()) / lambda;
             long   gapNano = (long) (gapSec * 1_000_000_000L);
             LockSupport.parkNanos(gapNano);

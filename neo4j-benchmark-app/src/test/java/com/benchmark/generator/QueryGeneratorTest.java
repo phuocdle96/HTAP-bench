@@ -1,59 +1,50 @@
 package com.benchmark.generator;
 
 import com.benchmark.client.DatabaseClient;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
 class QueryGeneratorTest {
 
-    @Mock
-    private DatabaseClient mockDbClient;
-
-    private QueryGenerator queryGenerator;
-
-    @BeforeEach
-    void setUp() {
-        when(mockDbClient.fetchSampleIds("MATCH (p:Patient) RETURN p.patientId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("patient1"));
-        when(mockDbClient.fetchSampleIds("MATCH (h:HealthcareUnit) RETURN h.unitId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("unit1"));
-        when(mockDbClient.fetchSampleIds("MATCH (d:Diagnosis) RETURN d.code as id LIMIT 10000", "id"))
-                .thenReturn(List.of("diag1"));
-        when(mockDbClient.fetchSampleIds("MATCH (a:Admission) RETURN a.eventId as id LIMIT 10000", "id"))
-                .thenReturn(List.of("adm1"));
-        
-        queryGenerator = new QueryGenerator(mockDbClient);
+    static class DummyDb implements DatabaseClient {
+        @Override public void connect() {}
+        @Override public List<Map<String, Object>> executeQuery(String q, Map<String, Object> p) { return List.of(); }
+        @Override public List<Map<String, Object>> executePrepared(QueryTemplate.PreparedQuery pq) { return List.of(); }
+        @Override public List<String> fetchSampleIds(String label, String idProp) {
+            // deterministic samples for test
+            return switch (label) {
+                case "Patient"        -> List.of("P1","P2","P3");
+                case "HealthcareUnit" -> List.of("H1","H2");
+                case "Diagnosis"      -> List.of("D1","D2","D3","D4");
+                default -> List.of("X");
+            };
+        }
+        @Override public void close() {}
     }
 
     @Test
-    void testTemplatesAreLoaded() {
-        assertNotNull(queryGenerator);
+    void preparesPoolsForNeo4j() {
+        QueryGenerator gen = new QueryGenerator(new DummyDb(), QueryGenerator.Engine.NEO4J);
+        var pools = gen.prepareAllQueries();
+        assertTrue(pools.get("OLTP").size()  > 0);
+        assertTrue(pools.get("GRAPH").size() > 0);
+        assertTrue(pools.get("OLAP").size()  > 0);
+        // Neo4j/Memgraph => CYPHER
+        assertEquals(QueryLanguage.CYPHER, pools.get("OLTP").get(0).lang);
     }
 
     @Test
-    void testPrepareAllQueriesGeneratesData() {
-        Map<String, List<QueryTemplate.PreparedQuery>> preparedQueries = queryGenerator.prepareAllQueries();
-
-        assertNotNull(preparedQueries);
-        assertFalse(preparedQueries.isEmpty());
-        assertTrue(preparedQueries.containsKey("OLTP"));
-        
-        List<QueryTemplate.PreparedQuery> oltpQueries = preparedQueries.get("OLTP");
-        assertFalse(oltpQueries.isEmpty());
-        
-        QueryTemplate.PreparedQuery firstQuery = oltpQueries.get(0);
-        assertNotNull(firstQuery.cypher());
-        assertNotNull(firstQuery.params());
+    void preparesPoolsForJanusGraph() {
+        QueryGenerator gen = new QueryGenerator(new DummyDb(), QueryGenerator.Engine.JANUSGRAPH);
+        var pools = gen.prepareAllQueries();
+        assertTrue(pools.get("OLTP").size()  > 0);
+        assertTrue(pools.get("GRAPH").size() > 0);
+        assertTrue(pools.get("OLAP").size()  > 0);
+        // JanusGraph => GREMLIN
+        assertEquals(QueryLanguage.GREMLIN, pools.get("OLTP").get(0).lang);
     }
 }
